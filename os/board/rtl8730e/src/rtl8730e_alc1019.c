@@ -66,6 +66,11 @@ extern FAR struct i2s_dev_s *amebasmart_i2s_initialize(uint16_t port, bool is_re
 #define ALC1019_GPIO_DMIC_EN        PA_25
 #endif
 
+/* When defined, the I2S bit-clock is not tri-stated, allowing
+   the NDP to use it as an external PDM clock source */
+// #define USE_EXTERNAL_PDM_CLOCK
+#define ALC1019_GPIO_I2S2_BCLK      PB_21
+
 #define ALC1019_AVAILABLE_MINOR_MIN	0
 #define ALC1019_AVAILABLE_MINOR_MAX	25
 
@@ -222,6 +227,15 @@ int rtl8730e_alc1019_initialize(int minor)
 		gpio_dir(&gpio_dmic_en, PIN_OUTPUT);
 		gpio_mode(&gpio_dmic_en, PullUp);
 #endif
+
+#if !defined(USE_EXTERNAL_PDM_CLOCK)
+    auddbg("Tri-stating I2S2 BCLK\n");
+    gpio_t gpio_i2s2_bclk;
+    gpio_init(&gpio_i2s2_bclk, ALC1019_GPIO_I2S2_BCLK);
+    gpio_dir(&gpio_i2s2_bclk, PIN_INPUT);
+    gpio_mode(&gpio_i2s2_bclk, PullNone);
+#endif
+
 		/* Now we are initialized */
 
 		initialized = true;
