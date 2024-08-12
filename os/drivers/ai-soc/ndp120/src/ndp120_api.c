@@ -77,6 +77,9 @@
 /* currently the max size of tank is limited to ~580ms  */
 #define AUDIO_BEFORE_MATCH_MS	(1500)
 
+/* this is the higher bound of the keyword length, it will be rounded down to multiple of frame size */
+#define KEYWORD_BUFFER_LEN      (SYNTIANT_NDP120_AUDIO_SAMPLE_RATE * SYNTIANT_NDP120_AUDIO_SAMPLES_PER_WORD * AUDIO_BEFORE_MATCH_MS / 1000)
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -98,8 +101,17 @@ static struct work_s ndp120_work;
 
 static bool include_keyword = false;
 
+/* buffer to hold the keyword data */
+static uint8_t keyword_buffer[KEYWORD_BUFFER_LEN];
+
+/* variable to keep track of data left in the keyword buffer */
+static volatile uint32_t keyword_bytes_left;
+
 /* only used for debugging purposes */
 static struct ndp120_dev_s *_ndp_debug_handle = NULL;
+
+/* buffer used for extracted annotated audio data */
+static uint8_t data_annot[2048];
 
 static int check_status(char *message, int s)
 {
@@ -543,14 +555,14 @@ static int get_versions_and_labels(struct syntiant_ndp_device_s *ndp,
 }
 
 static int configure_audio(struct syntiant_ndp_device_s *ndp, unsigned int pdm_in_shift,
-				unsigned int audio_tank_ms, unsigned int *audio_frame_bytes)
+				unsigned int audio_tank_ms, unsigned int *sample_size, unsigned int *sample_size_orig_annot)
 {
 	const unsigned int PDM_MAX_OUT_SHIFT = 7; /* always set to max */
 	struct syntiant_ndp120_config_decimation_s decimation_config;
 	struct syntiant_ndp120_config_tank_s tank_config;
 	struct syntiant_ndp120_config_pdm_s pdm_config;
 	struct syntiant_ndp120_config_misc_s misc_config;
-	unsigned int audio_frame_bytes_;
+	ndp120_dsp_config_t dsp_config = {0};
 	int s;
 
 	/* configure PDM in shift for both mics */
@@ -629,10 +641,14 @@ static int configure_audio(struct syntiant_ndp_device_s *ndp, unsigned int pdm_i
 		goto errout_configure_audio;
 	}
 
-	audio_frame_bytes_ = misc_config.audio_frame_step
-		* SYNTIANT_NDP120_AUDIO_SAMPLES_PER_WORD;
+	*sample_size_orig_annot = misc_config.audio_sample_size_bytes;
 
-	*audio_frame_bytes = audio_frame_bytes_;
+	s = syntiant_ndp120_read_sample_config(ndp, &dsp_config);
+	if (s) {
+		goto errout_configure_audio;
+	}
+
+	*sample_size = dsp_config.aud_samp_size_bytes;
 
 errout_configure_audio:
 	return s;
@@ -969,15 +985,14 @@ int ndp120_init(struct ndp120_dev_s *dev)
 	attach_algo_config_area(dev->ndp);
 	add_dsp_flow_rules(dev->ndp);
 
-	s = configure_audio(dev->ndp, DMIC_768KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &audio_frame_bytes);
+	s = configure_audio(dev->ndp, DMIC_768KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &dev->sample_size, &dev->sample_size_orig_annot);
 	if (s) {
 		auddbg("audio configure failed\n");
 		goto errout_ndp120_init;
 	}
 
-	dev->keyword_bytes = SYNTIANT_NDP120_AUDIO_SAMPLE_RATE * SYNTIANT_NDP120_AUDIO_SAMPLES_PER_WORD
-		* AUDIO_BEFORE_MATCH_MS / 1000;
-	dev->keyword_bytes = round_down(dev->keyword_bytes, audio_frame_bytes);
+	dev->keyword_bytes = KEYWORD_BUFFER_LEN;
+	dev->keyword_bytes = round_down(dev->keyword_bytes, dev->sample_size);
 
 	s_num_labels = 16;
 	s = get_versions_and_labels(dev->ndp, s_label_data, sizeof(s_label_data), s_labels, &s_num_labels);
@@ -1103,49 +1118,54 @@ int ndp120_irq_handler(struct ndp120_dev_s *dev)
 	return work_queue(HPWORK, &ndp120_work, ndp120_irq_handler_work, (void *)dev, 0);
 }
 
+int ndp120_set_match_per_frame(struct ndp120_dev_s *dev, int on)
+{
+	int s;
+	syntiant_ndp120_config_misc_t ndp120_config;
+ 	memset(&ndp120_config, 0, sizeof(ndp120_config));
+	ndp120_config.set = SYNTIANT_NDP120_CONFIG_SET_MISC_MATCH_PER_FRAME_ON;
+	ndp120_config.match_per_frame_on = on;
+	s = syntiant_ndp120_config_misc(dev->ndp, &ndp120_config);
+	return s;
+}
+
 int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 			  unsigned int total_bytes)
 {
 	struct syntiant_ndp_device_s *ndp = dev->ndp;
 	int s;
-	unsigned int extract_bytes;
-	unsigned int extracted_bytes;
-	unsigned int remaining_bytes;
-	unsigned int buffer_write_loc;
 
-	extracted_bytes = 0;
+	/* buffer size (apb size) for ndp120 is set equal to the sample size.
+	 * Hence, all the calls to extract_audio will have total bytes as sample size
+	 * So, we can safely copy the extracted data without checking the limits on the
+	 * apb size
+	 */
 
-	while (true) {
-
-		while (extracted_bytes < total_bytes) {
-
-			remaining_bytes = total_bytes - extracted_bytes;
-			extract_bytes = remaining_bytes;
-			buffer_write_loc = extracted_bytes;
-
-			s = syntiant_ndp_extract_data(ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
-									SYNTIANT_NDP_EXTRACT_FROM_UNREAD,
-									&audio_out_buffer[buffer_write_loc],
-									&extract_bytes);
-
-			if (s == SYNTIANT_NDP_ERROR_DATA_REREAD) {
-				/* wait for the interrupt from ndp */
-				sem_wait(&dev->sample_ready_signal);
-				break;
-			}
-
-			if (check_status("extract", s)) {
-				return SYNTIANT_NDP_ERROR_FAIL;
-			}
-
-			extracted_bytes += min(remaining_bytes, extract_bytes);
-
+	if (keyword_bytes_left != 0) {
+		memcpy(audio_out_buffer, &keyword_buffer[dev->keyword_bytes - keyword_bytes_left], dev->sample_size);
+		keyword_bytes_left -= dev->sample_size;
+		if (keyword_bytes_left == 0) {
+			/* turn on MPF interrutps */
+			s =  ndp120_set_match_per_frame(dev, 1);
 		}
+		return SYNTIANT_NDP_ERROR_NONE;
+	} else {
+		/* wait for MPF interrupt */
+		sem_wait(&dev->sample_ready_signal);
 
-		if (extracted_bytes >= total_bytes) {
-			break;
+		uint32_t sample_size = dev->sample_size_orig_annot;
+		s = SYNTIANT_NDP_ERROR_NONE;
+		do {
+			s = syntiant_ndp_extract_data(dev->ndp,
+				SYNTIANT_NDP_EXTRACT_TYPE_INPUT_ANNOTATED,
+				SYNTIANT_NDP_EXTRACT_FROM_UNREAD, data_annot, &sample_size);
+		} while (s == SYNTIANT_NDP_ERROR_DATA_REREAD);
+
+		if (sample_size > sizeof(ndp120_dsp_audio_sample_annotation_t)) {
+			sample_size -= sizeof(ndp120_dsp_audio_sample_annotation_t);
 		}
-
+	
+		memcpy(audio_out_buffer, data_annot + sizeof(ndp120_dsp_audio_sample_annotation_t), sample_size);
 	}
 
 	return SYNTIANT_NDP_ERROR_NONE;
@@ -1189,33 +1209,22 @@ int ndp120_kd_start_match_process(struct ndp120_dev_s *dev) {
     return s;
 }
 
-int ndp120_set_match_per_frame(struct ndp120_dev_s *dev, int on)
-{
-	int s;
-	syntiant_ndp120_config_misc_t ndp120_config;
-	memset(&ndp120_config, 0, sizeof(ndp120_config));
-	ndp120_config.set = SYNTIANT_NDP120_CONFIG_SET_MISC_MATCH_PER_FRAME_ON;
-	ndp120_config.match_per_frame_on = on;
-	s = syntiant_ndp120_config_misc(dev->ndp, &ndp120_config);
-	return s;
-}
-
 int ndp120_start_sample_ready(struct ndp120_dev_s *dev)
 {
 	int s;
 
 	dev->recording = true;
 
-	s =  ndp120_set_match_per_frame(dev, 1);
-
 	if (include_keyword) {
 		unsigned int extract_bytes = dev->keyword_bytes;
 		s = syntiant_ndp_extract_data(dev->ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
-										SYNTIANT_NDP_EXTRACT_FROM_MATCH, NULL,
-										&extract_bytes);
+								SYNTIANT_NDP_EXTRACT_FROM_MATCH, (uint8_t *)keyword_buffer,
+								&dev->keyword_bytes);
 		if (check_status("extract match", s)) {
 			return s;
 		}
+		
+		keyword_bytes_left = dev->keyword_bytes;
 
 		include_keyword = false;
 	}
