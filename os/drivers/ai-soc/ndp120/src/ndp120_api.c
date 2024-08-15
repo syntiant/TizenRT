@@ -891,57 +891,11 @@ void add_dsp_flow_rules(struct syntiant_ndp_device_s *ndp)
  ****************************************************************************/
 
 /* debug function, useful for doing debugging via shell */
-void ndp120_show_debug(void)
+struct ndp120_dev_s * ndp120_get_debug_handle(void)
 {
-	uint8_t tmp;
-	int i, s;
-	ndp120_dsp_counters_t dsp_cnts;
-	int flowset_id;
-
-	if (!_ndp_debug_handle) return;
-
-	struct syntiant_ndp_device_s *ndp = _ndp_debug_handle->ndp;
-
-	printf("NDP SPI REGISTERS:\n");
-	for (i = 0; i <= 0x12; i++) {
-		syntiant_ndp120_read(ndp, 0, i, &tmp);
-		printf("0x%02X = %02X\n", i, tmp);
-	}
-
-	for (i = 0x30; i <= 0x33; i++) {
-		syntiant_ndp120_read(ndp, 0, i, &tmp);
-		printf("0x%02X = %02X\n", i, tmp);
-	}
-
-	s = syntiant_ndp120_get_dsp_counters(ndp, &dsp_cnts);
-	check_status("syntiant_ndp120_get_dsp_counters", s);
-	printf("frame_cnt: %d\n", dsp_cnts.frame_cnt);
-	printf("dnn_int_cnt: %d\n", dsp_cnts.dnn_int_cnt);
-	printf("dnn_err_cnt: %d\n", dsp_cnts.dnn_err_cnt);
-
-	syntiant_ndp120_config_tank_t tank_config;
-	memset(&tank_config, 0, sizeof(tank_config));
-	tank_config.get = 1;
-	s = syntiant_ndp120_config_dsp_tank_memory(ndp, &tank_config);
-	check_status("syntiant_ndp120_config_dsp_tank_memory", s);
-	printf("NDP120 Tank memory type: %s\n", tank_config.sampletank_mem_type == 1? "HEAP": "DNN");
-	printf("NDP120 Tank size (ms)  : %d\n", tank_config.sampletank_msec);
-
-	flowset_id = -1; /* indicates read */
-	s = syntiant_ndp120_dsp_flow_get_put_set_id(ndp, &flowset_id);
-	check_status("syntiant_ndp120_dsp_flow_get_put_set_id", s);
-	printf("NDP120 current flowset id: %d\n", flowset_id);
-
-	printf("KD Enabled: %d\n",_ndp_debug_handle->kd_enabled);
-
-	uint32_t data;
-	syntiant_ndp120_read(ndp, 1, NDP120_CHIP_CONFIG_AUDCTRL(0), &data);
-	printf("NDP120_CHIP_CONFIG_AUDCTRL(0) = 0x%08X\n", data);
-
-	syntiant_ndp120_read(ndp, 1, NDP120_DSP_CONFIG_PDMCFG_A(0), &data);
-	printf("NDP120_DSP_CONFIG_PDMCFG_A(0) = 0x%08X\n", data);
-
+	return _ndp_debug_handle;
 }
+
 
 int ndp120_init(struct ndp120_dev_s *dev)
 {

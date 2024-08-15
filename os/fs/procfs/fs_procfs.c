@@ -96,6 +96,9 @@ extern const struct procfs_operations proc_operations;
 extern const struct procfs_operations cpuload_operations;
 extern const struct procfs_operations uptime_operations;
 extern const struct procfs_operations version_operations;
+#if defined(CONFIG_AUDIO_NDP120)
+extern const struct procfs_operations ndp120_proc_operations;
+#endif
 #if defined(CONFIG_LOG_DUMP)
 extern const struct procfs_operations logsave_operations;
 #endif
@@ -171,6 +174,10 @@ static const struct procfs_entry_s g_procfsentries[] = {
 #if !defined(CONFIG_FS_PROCFS_EXCLUDE_EREPORT)
 	{"ereport**", &ereport_operations},
 	{"ereport/*", &ereport_operations},
+#endif
+
+#if defined(CONFIG_AUDIO_NDP120) && !defined(CONFIG_FS_PROCFS_EXCLUDE_NDP120)
+	{"ndp120", &ndp120_proc_operations},
 #endif
 
 	{NULL, NULL}
