@@ -28,7 +28,7 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- 	** SDK: v112.2.0-Samsung **
+ 	** SDK: v112.3.2-Samsung **
 */
 
 #include <syntiant_ilib/syntiant_portability.h>
@@ -190,7 +190,7 @@ static int syntiant_ndp120_alloc_algo_config_area_no_sync(
 
 /* helper functions */
 
-static uint32_t umin(uint32_t a, uint32_t b)
+static uint32_t ndp_umin(uint32_t a, uint32_t b)
 {
     return minimum(a, b);
 }
@@ -1604,6 +1604,7 @@ syntiant_ndp120_do_mailbox_req_no_sync(struct syntiant_ndp_device_s *ndp,
             case NDP120_DSP_MB_H2D_REQUEST_NOP:
             case NDP120_DSP_MB_H2D_EXT_SENSOR_INIT:
             case NDP120_DSP_MB_H2D_EXT_GET_AUDIO_PARAMS:
+            case NDP120_DSP_MB_H2D_EXT_MISC_INPUT_SIZE:
                 is_mcu = 0;
                 break;
             default:
@@ -2074,6 +2075,10 @@ dsp_mb_processor(struct syntiant_ndp_device_s *ndp, uint32_t *notify)
     case NDP120_DSP_MB_D2H_RUNNING:
         *notify = SYNTIANT_NDP_NOTIFICATION_MAILBOX_IN;
         DEBUG_PRINTF("got DSP RUNNING, mailbox notify\n");
+        break;
+
+    case NDP120_DSP_MB_D2H_EXTRACT_DELAY_ERROR:
+        DEBUG_PRINTF("Extract delay error\n");
         break;
 
     case NDP120_DSP_MB_D2H_EXT:
@@ -3893,6 +3898,73 @@ error:
 }
 
 int
+syntiant_ndp120_dsp_get_info(struct syntiant_ndp_device_s *ndp)
+{
+    int s = SYNTIANT_NDP_ERROR_NONE, s0;
+    syntiant_ndp120_device_t *ndp120 = &ndp->d.ndp120;
+    uint32_t addr_r = NDP120_DSP_OPEN_RAM_RESULTS;
+
+    s = (ndp->iif.sync)(ndp->iif.d);
+    if (s) return s;
+
+    s = syntiant_ndp120_do_mailbox_req_no_sync(ndp,
+        NDP120_DSP_MB_H2D_EXT_GET_INFO, NULL);
+    if (s) goto error;
+
+    s = syntiant_ndp120_read_block(ndp, 1, addr_r, &ndp120->extract_percentage,
+        sizeof(ndp120->extract_percentage));
+    if (s) goto error;
+
+error:
+    s0 = (ndp->iif.unsync)(ndp->iif.d);
+    s = s ? s : s0;
+    return s;
+}
+
+int syntiant_ndp120_get_extract_sample_size(
+    struct syntiant_ndp_device_s *ndp, int spi_speed, uint32_t sample_size,
+    int channels, uint32_t *extract_size)
+{
+    int s = SYNTIANT_NDP_ERROR_NONE;
+    syntiant_ndp120_device_t *ndp120 = &ndp->d.ndp120;
+    uint32_t time_per_frame_in_us;
+    uint32_t num_frames_per_winstep, num_frames;
+    uint32_t winstep_ms, sample_rate;
+    uint32_t spi_speed_in_hz = (uint32_t)spi_speed / 1000000;
+    uint32_t sample_width = PCM_AUDIO_SAMPLE_WIDTH_BYTES;
+    uint32_t bits_per_byte = 8;
+    uint32_t extract_delay;
+    syntiant_ndp120_config_pdm_t config_pdm;
+    memset(&config_pdm, 0, sizeof(config_pdm));
+    config_pdm.get = 1;
+    s = syntiant_ndp120_config_pdm_no_sync(ndp, &config_pdm);
+    if (s) {
+        SYNTIANT_PRINTF("pdm: config pdm fail\n");
+        goto done;
+    }
+    sample_rate = config_pdm.sample_rate;
+    if (!ndp120->extract_percentage) {
+        s = syntiant_ndp120_dsp_get_info(ndp);
+        if (s) {
+            goto done;
+        }
+    }
+    extract_delay = ndp120->extract_percentage;
+
+    time_per_frame_in_us = (sample_size * bits_per_byte / spi_speed_in_hz);
+    winstep_ms = (sample_size * 1000 / sample_rate /  sample_width);
+    num_frames_per_winstep = (winstep_ms * 1000 / time_per_frame_in_us);
+    num_frames = num_frames_per_winstep * extract_delay / 100;
+    if (channels >= TWO_CHANNELS) {
+        sample_size += (uint32_t)sizeof(ndp120_dsp_audio_sample_annotation_t);
+    }
+    *extract_size = num_frames * sample_size;
+
+done:
+    return s;
+}
+
+int
 syntiant_ndp120_config_dsp_tank_memory(struct syntiant_ndp_device_s *ndp,
                                        syntiant_ndp120_config_tank_t *config)
 {
@@ -3965,9 +4037,75 @@ syntiant_ndp120_config_dsp_tank_memory(struct syntiant_ndp_device_s *ndp,
     s = syntiant_ndp120_read_dsp_state(ndp, &dsp_state);
     if (s) goto error;
     config->sampletank_msec = cfg.aud_samp_cap * max_winstep_us / 1000;
-    config->sampletank_mem_type = dsp_state.sampletank_mem_type;;
+    config->sampletank_mem_type = dsp_state.sampletank_mem_type;
+    ndp120->dsp_sampletank_mem_type =dsp_state.sampletank_mem_type;
 
 error:
+    return s;
+}
+
+int
+syntiant_ndp120_config_flow_rules(struct syntiant_ndp_device_s *ndp,
+                    enum syntiant_ndp120_input_config_mode_e input_type)
+{
+    int s, counter = 0;
+    uint8_t idx = 0;
+    syntiant_pkg_parser_state_t *pstate = &ndp->pstate;
+    ndp120_dsp_data_flow_setup_t *driver_flow_setup =
+        (ndp120_dsp_data_flow_setup_t *) pstate->metadata.scratch_metadata;
+    syntiant_ndp120_config_pdm_t ndp120_pdm_config;
+
+    ndp120_pdm_config.get = 1;
+
+    s = syntiant_ndp120_config_pdm_no_sync(ndp, &ndp120_pdm_config);
+    if (s) {
+        SYNTIANT_PRINTF("pdm: config pdm fail\n");
+        goto out;
+    }
+
+    s = syntiant_ndp120_dsp_flow_setup_get_no_sync(ndp, driver_flow_setup);
+    if (s) goto out;
+
+    for (idx = 0; idx < ARRAY_LEN(driver_flow_setup->src_pcm_audio); idx++) {
+        ndp120_dsp_data_flow_rule_t *rule = &driver_flow_setup->src_pcm_audio[idx];
+        if (NDP120_DSP_FLOW_RULE_IS_VALID(*rule)) {
+            if (input_type == SYNTIANT_NDP120_INPUT_CONFIG_SPI) {
+                if (driver_flow_setup->src_pcm_audio[idx].dst_type ==
+                    NDP120_DSP_DATA_FLOW_SRC_TYPE_FUNCTION &&
+                    driver_flow_setup->src_pcm_audio[idx].dst_param ==
+            NDP120_DSP_DATA_FLOW_FUNCTION_NOAEC_FF) {
+                    DEBUG_PRINTF("please use the valid package(single channel) for SPI watch\n");
+            s = SYNTIANT_NDP_ERROR_PACKAGE;
+                    goto out;
+                }
+                rule->src_param = NDP120_DSP_DATA_FLOW_SRC_PARAM_SPI;
+            }
+            if (input_type == SYNTIANT_NDP120_INPUT_CONFIG_PDM) {
+                if (ndp120_pdm_config.mode == NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_STEREO) {
+                    if (driver_flow_setup->src_pcm_audio[idx].dst_type ==
+                        NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT) {
+                        counter++;
+                        rule->src_param = (counter == 1) ? NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_LEFT :
+                            NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_RIGHT;
+                    }
+                    else {
+                        rule->src_param = driver_flow_setup->src_pcm_audio[idx].src_param;
+                    }
+                }
+                else if(ndp120_pdm_config.mode == NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_LEFT ||
+                    NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_RIGHT) {
+                    rule->src_param = ndp120_pdm_config.mode;
+                }
+            }
+        }
+    }
+    s = syntiant_ndp120_dsp_flow_setup_apply_no_sync(ndp, driver_flow_setup);
+    if (s) goto out;
+
+    s = syntiant_ndp120_dsp_restart(ndp);
+    if (s) goto out;
+
+out:
     return s;
 }
 
@@ -5355,9 +5493,9 @@ syntiant_ndp120_pkg_parse_i2s_in_cfg_v1(struct syntiant_ndp_device_s *ndp)
     syntiant_pkg_parser_state_t *pstate = &ndp->pstate;
     struct ndp120_i2s_in_params *pdm = &pstate->data.pdm_cfg.tlv86;
     syntiant_ndp120_config_farrow_t config_farrow;
-    syntiant_ndp120_config_gain_t config_gain;
+    /* syntiant_ndp120_config_gain_t config_gain;  */
     syntiant_ndp120_config_i2s_t config_i2s;
-    unsigned base_mic_id, i;
+    /* unsigned base_mic_id, i; */
 
     /* post-read actions */
     if (pstate->partially_read_length != *(uint32_t *)pstate->length) {
@@ -5409,7 +5547,7 @@ syntiant_ndp120_pkg_parse_i2s_in_cfg_v1(struct syntiant_ndp_device_s *ndp)
         SYNTIANT_PRINTF("i2s_in: config farrow fail\n");
         goto done;
     }
-
+/*
     base_mic_id = pdm->aud_id * SYNTIANT_PDM_CHANNEL_COUNT;
     for (i = 0; i < SYNTIANT_PDM_CHANNEL_COUNT; i++) {
         struct i2s_in_channel *ch = pdm->channel + i;
@@ -5432,7 +5570,7 @@ syntiant_ndp120_pkg_parse_i2s_in_cfg_v1(struct syntiant_ndp_device_s *ndp)
             goto done;
         }
     }
-
+*/
 done:
     return s;
 }
@@ -5512,9 +5650,9 @@ syntiant_ndp120_pkg_parse_i2s_out_cfg_v1(struct syntiant_ndp_device_s *ndp)
     syntiant_pkg_parser_state_t *pstate = &ndp->pstate;
     struct ndp120_i2s_out_params *pdm = &pstate->data.pdm_cfg.tlv87;
     syntiant_ndp120_config_farrow_t config_farrow;
-    syntiant_ndp120_config_gain_t config_gain;
+    /* syntiant_ndp120_config_gain_t config_gain; */
     syntiant_ndp120_config_i2s_t config_i2s;
-    unsigned base_mic_id, i;
+    /* unsigned base_mic_id, i; */
 
     /* post-read actions */
     if (pstate->partially_read_length != *(uint32_t *)pstate->length) {
@@ -5576,7 +5714,7 @@ syntiant_ndp120_pkg_parse_i2s_out_cfg_v1(struct syntiant_ndp_device_s *ndp)
         SYNTIANT_PRINTF("i2s_out: config farrow fail\n");
         goto done;
     }
-
+/*
     base_mic_id = NDP120_TLV_I2S_OUT_AUD2 * SYNTIANT_PDM_CHANNEL_COUNT;
     for (i = 0; i < SYNTIANT_PDM_CHANNEL_COUNT; i++) {
         struct i2s_out_channel *ch = pdm->channel + i;
@@ -5598,7 +5736,7 @@ syntiant_ndp120_pkg_parse_i2s_out_cfg_v1(struct syntiant_ndp_device_s *ndp)
             goto done;
         }
     }
-
+*/
 done:
     return s;
 }
@@ -5931,7 +6069,7 @@ syntiant_ndp120_access_config(struct syntiant_ndp_device_s *ndp,
         if (s) goto error;
 
         buffer = config->labels;
-        len = umin(labels_len, length_in_scratch);
+        len = ndp_umin(labels_len, length_in_scratch);
         if (buffer && len > 0) {
             s = ndp_mcu_read_block(SCRATCH_VARIABLE_ADX(labels), buffer, len);
             if (s) goto error;
@@ -5945,7 +6083,7 @@ syntiant_ndp120_access_config(struct syntiant_ndp_device_s *ndp,
         if (s) goto error;
         if (length_in_scratch < NDP120_ILIB_SCRATCH_LENGTH) {
             buffer = config->firmware_version;
-            len = umin(firmware_version_len, length_in_scratch);
+            len = ndp_umin(firmware_version_len, length_in_scratch);
             if (buffer && 0 < len) {
                 s = ndp_mcu_read_block(SCRATCH_VARIABLE_ADX(fw_version) , buffer, len);
                 if (s) goto error;
@@ -5960,7 +6098,7 @@ syntiant_ndp120_access_config(struct syntiant_ndp_device_s *ndp,
         if (s) goto error;
         if (length_in_scratch < NDP120_ILIB_SCRATCH_LENGTH) {
             buffer = config->dsp_firmware_version;
-            len = umin(dsp_firmware_version_len, length_in_scratch);
+            len = ndp_umin(dsp_firmware_version_len, length_in_scratch);
             if (buffer && 0 < len) {
                 s = ndp_mcu_read_block(SCRATCH_VARIABLE_ADX(dsp_fw_version), buffer, len);
                 if (s) goto error;
@@ -5976,7 +6114,7 @@ syntiant_ndp120_access_config(struct syntiant_ndp_device_s *ndp,
         if (length_in_scratch < NDP120_ILIB_SCRATCH_LENGTH) {
             buffer = config->pkg_version;
 
-            len = umin(pkg_version_len, length_in_scratch);
+            len = ndp_umin(pkg_version_len, length_in_scratch);
             if (buffer && 0 < len) {
                 s = ndp_mcu_read_block (SCRATCH_VARIABLE_ADX(pkg_version), buffer, len);
                 if (s) goto error;
@@ -7184,6 +7322,7 @@ int syntiant_ndp120_extract_data(struct syntiant_ndp_device_s *ndp, int type,
     uint32_t buf_start, buf_end;
     uint32_t ann_buf_start = 0;
     uint32_t buf_size_bytes;
+    uint32_t dsp_lock;
 
     uint32_t bytes_available, effective_bytes_available;
     uint32_t chunk_count;
@@ -7194,11 +7333,15 @@ int syntiant_ndp120_extract_data(struct syntiant_ndp_device_s *ndp, int type,
     uint32_t samp_cap = 0;
     int extract_all = 0;
     uint32_t preroll_len;
+    uint32_t winstep_us;
+    uint32_t frequency = CPU_FREQUENCY;
+    uint32_t cycles_per_winstep, total_cycles = 0;
 
     /* device info & fw state info*/
     struct syntiant_ndp120_device_s *ndp120 = &ndp->d.ndp120;
     ndp120_dsp_config_t  fw_config;
     ndp120_dsp_buffers_t fw_buffers = { 0 };
+    syntiant_ndp120_config_tank_t tankcfg = {0};
 
     struct recording_metadata {
         uint32_t prod_ptr;
@@ -7424,6 +7567,45 @@ int syntiant_ndp120_extract_data(struct syntiant_ndp_device_s *ndp, int type,
         }
         goto error;
     }
+    if (!ndp120->dsp_sampletank_mem_type) {
+        tankcfg.get = 1;
+        s = syntiant_ndp120_config_dsp_tank_memory(ndp, &tankcfg);
+        if (s) {
+            goto error;
+        }
+    }
+
+    if (ndp120->dsp_sampletank_mem_type == NDP120_DSP_MEM_TYPE_DNN_DATA) {
+        adx = ndp120->dsp_fw_state_addr +
+            (uint32_t) offsetof(ndp120_dsp_fw_base_t, max_winstep_us);
+        s = syntiant_ndp120_read_block(ndp, 1, adx, &winstep_us,
+                                   sizeof(winstep_us));
+        adx = NDP120_CHIP_CONFIG_SPARE(1);
+        cycles_per_winstep = (frequency / 1000000) * winstep_us;
+        while(1) {
+            s = syntiant_ndp120_read_block(ndp, 1, adx, &dsp_lock,
+                sizeof(dsp_lock));
+            if (s) {
+                goto error;
+            }
+            if (dsp_lock == 0) {
+                break;
+            }
+            if (total_cycles >= cycles_per_winstep) {
+                DEBUG_PRINTF("DSP is not freeing the Extraction Lock\n");
+                s = SYNTIANT_NDP_ERROR_EXTRACTION_LOCK_TIMEOUT;
+                goto error;
+            }
+            total_cycles++;
+        }
+        adx = NDP120_CHIP_CONFIG_SPARE(0);
+        dsp_lock = NDP_HOST_EXTRACTION_LOCK_SIG;
+        s = syntiant_ndp120_write_block(ndp, 1, adx, &dsp_lock,
+            sizeof(dsp_lock));
+        if (s) {
+            goto error;
+        }
+    }
 
     /* read out the actual data */
     chunk_count = *lenp / effective_sample_size;
@@ -7508,6 +7690,15 @@ int syntiant_ndp120_extract_data(struct syntiant_ndp_device_s *ndp, int type,
                 *(ndp120_dsp_audio_sample_annotation_t *)(dst-sizeof(ann)) = ann;
                 ++ann_ptr;
             }
+        }
+    }
+    if (ndp120->dsp_sampletank_mem_type == NDP120_DSP_MEM_TYPE_DNN_DATA) {
+        adx = NDP120_CHIP_CONFIG_SPARE(0);
+        dsp_lock = 0;
+        s = syntiant_ndp120_write_block(ndp, 1, adx, &dsp_lock,
+            sizeof(dsp_lock));
+        if (s) {
+            goto error;
         }
     }
 
@@ -8086,7 +8277,7 @@ static int compute_crc_mcu(struct syntiant_ndp_device_s *ndp, uint32_t adx, uint
     *crc_out = crc32_no_lib_init();
 
     while(len) {
-        chunk_size = umin(sizeof(data), len);
+        chunk_size = ndp_umin(sizeof(data), len);
         chunk_size = (chunk_size + 3) / 4 * 4;
         s = ndp_mcu_read_block(adx, data, chunk_size);
         if(s) goto error;
@@ -9404,86 +9595,6 @@ out:
     return s;
 }
 
-static int syntiant_ndp120_custom_posterior_handler_no_sync(
-    struct syntiant_ndp_device_s *ndp,
-    struct syntiant_posterior_handler_s *cfg)
-{
-    int s = SYNTIANT_NDP_ERROR_NONE;
-    uint32_t addr = NDP120_MCU_OPEN_RAM_BGN;
-    uint32_t length =  (uint32_t)sizeof(*cfg) + cfg->length;
-    void *payload = cfg + 1;
-
-    addr += (uint32_t)sizeof(uint32_t);
-    /* write total length */
-    s = syntiant_ndp120_write_block(
-        ndp, SYNTIANT_NDP120_MCU, addr, &length, sizeof(length));
-    if (s) goto error;
-
-    addr += (uint32_t)sizeof(length);
-    /* write *cfg struct */
-    s = syntiant_ndp120_write_block(
-        ndp, SYNTIANT_NDP120_MCU, addr, cfg, sizeof(*cfg));
-    if (s) goto error;
-
-    if (cfg->op != NDP120_PH_OP_READ ||
-        cfg->op != NDP120_PH_OP_ATTACH_NN) {
-        addr += (uint32_t)sizeof(*cfg);
-        /* write payload */
-        s = syntiant_ndp120_write_block(
-            ndp, SYNTIANT_NDP120_MCU, addr, payload, cfg->length);
-        if (s) goto error;
-    }
-
-    /* send command */
-    s = syntiant_ndp120_do_mailbox_req_no_sync(ndp,
-        NDP_MBIN_REQUEST_POSTERIOR_HANDLER, NULL);
-    if (s) goto error;
-
-    memset(payload, 0, cfg->length);
-    addr = NDP120_MCU_OPEN_RAM_RESULTS;
-    /* read payload */
-    s = syntiant_ndp120_read_block(
-        ndp, SYNTIANT_NDP120_MCU, addr, payload, cfg->length);
-    if (s) goto error;
-
-error:
-    return s;
-}
-
-int syntiant_ndp120_custom_posterior_handler(
-    struct syntiant_ndp_device_s *ndp,
-    struct syntiant_posterior_handler_s *cfg)
-{
-    int s;
-
-    if (cfg->id >= MAX_PH_ALGOS ||
-        cfg->op > NDP120_PH_OP_ATTACH_NN ||
-        cfg->length > SYNTIANT_POSTERIOR_HANDLER_DATA_MAXLEN ||
-        cfg->nn_id >= MAX_NNETWORKS) {
-        s = SYNTIANT_NDP_ERROR_ARG;
-        goto error;
-    }
-
-    s = (ndp->iif.sync)(ndp->iif.d);
-    if (s) {
-        DEBUG_PRINTF("Error in syntiant_ndp120_posterior_config\n");
-        goto error;
-    }
-
-    s = syntiant_ndp120_custom_posterior_handler_no_sync(ndp, cfg);
-    if (s) {
-        goto error;
-    }
-
-    s = (ndp->iif.unsync)(ndp->iif.d);
-    if (s) {
-        goto error;
-    }
-
-error:
-    return s;
-}
-
 static int syntiant_ndp120_erase_algo_config_areas_no_sync(
     struct syntiant_ndp_device_s *ndp)
 {
@@ -9655,6 +9766,77 @@ int syntiant_ndp120_set_get_dnn_run_delay(struct syntiant_ndp_device_s *ndp,
     }
     s = syntiant_ndp120_set_get_dnn_run_delay_no_sync(ndp, rule, src_type,
         delay, set);
+    s0 = (ndp->iif.unsync)(ndp->iif.d);
+    s = s ? s : s0;
+out:
+    return s;
+}
+
+static int
+syntiant_ndp120_set_get_input_size_no_sync(
+    struct syntiant_ndp_device_s *ndp, const ndp120_dsp_data_flow_rule_t *rule,
+    syntiant_ndp120_flow_src_type_t src_type, uint32_t *input_size, uint32_t set)
+{
+    int s = SYNTIANT_NDP_ERROR_NONE;
+    uint32_t adx_w = NDP120_DSP_OPEN_RAM_START;
+    uint32_t payload[3];
+
+    if (!input_size) {
+        s = SYNTIANT_NDP_ERROR_ARG;
+        goto out;
+    }
+    payload[0] = set;
+    payload[1] = *input_size;
+    payload[2] = src_type;
+
+    /* write set/get, input_size and src_type at the start of dsp open ram */
+    s = syntiant_ndp120_write_block(ndp, SYNTIANT_NDP120_MCU,
+        adx_w, &payload, sizeof(payload));
+    if (s) {
+        DEBUG_PRINTF("Error in write block while setting input size\n");
+        goto out;
+    }
+    adx_w += (uint32_t)sizeof(payload);
+
+    /* write flow rule */
+    s = syntiant_ndp120_write_block(ndp, SYNTIANT_NDP120_MCU,
+        adx_w, rule, sizeof(*rule));
+    if (s) {
+        DEBUG_PRINTF("Error in write block while setting input size\n");
+        goto out;
+    }
+
+    s = syntiant_ndp120_do_mailbox_req_no_sync(ndp,
+        NDP120_DSP_MB_H2D_EXT_MISC_INPUT_SIZE, NULL);
+    if (s) {
+        DEBUG_PRINTF("Error in mailbox no sync while setting input size\n");
+        goto out;
+    }
+
+    if (!set) {
+        /* read input size */
+        s = syntiant_ndp120_read_block(ndp, SYNTIANT_NDP120_MCU,
+            NDP120_DSP_OPEN_RAM_RESULTS, input_size, sizeof(*input_size));
+        if (s) {
+            DEBUG_PRINTF("Error read block while getting input size\n");
+        }
+    }
+out:
+    return s;
+}
+
+int syntiant_ndp120_set_get_input_size(struct syntiant_ndp_device_s *ndp,
+    const ndp120_dsp_data_flow_rule_t *rule, syntiant_ndp120_flow_src_type_t
+    src_type, uint32_t *input_size, uint32_t set)
+{
+    int s0, s;
+    s = (ndp->iif.sync)(ndp->iif.d);
+    if (s) {
+        DEBUG_PRINTF("Error in syntiant_ndp120_set_input_size\n");
+        goto out;
+    }
+    s = syntiant_ndp120_set_get_input_size_no_sync(ndp, rule, src_type,
+        input_size, set);
     s0 = (ndp->iif.unsync)(ndp->iif.d);
     s = s ? s : s0;
 out:
@@ -9849,6 +10031,36 @@ int syntiant_ndp120_read_scratch(struct syntiant_ndp_device_s *ndp, void* in,
         goto out;
     }
     s = ndp_mcu_read_block(ndp_get_scratch_address(ndp), in, length);
+out:
+    return s;
+}
+
+int syntiant_ndp120_get_active_configurations(
+    struct syntiant_ndp_device_s *ndp, int *active_channels)
+{
+    int s = SYNTIANT_NDP_ERROR_NONE;
+    uint8_t idx;
+    uint32_t src_params = 0;
+    ndp120_dsp_data_flow_setup_t setup;
+    s = syntiant_ndp120_dsp_flow_setup_get(ndp, &setup);
+    if (s) {
+        DEBUG_PRINTF("Error syntiant_ndp120_dsp_flow_setup_get\n");
+        goto out;
+    }
+    for (idx = 0; idx < NDP120_PCM_DATA_FLOW_RULE_MAX; idx++) {
+        if (setup.src_pcm_audio[idx].dst_type ==
+            NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT) {
+            src_params |= setup.src_pcm_audio[idx].src_param;
+        }
+    }
+
+    if (src_params == NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_STEREO) {
+        *active_channels = TWO_CHANNELS;
+    } else if (src_params == NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_LEFT ||
+        NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_RIGHT) {
+        *active_channels = SINGLE_CHANNEL;
+    }
+
 out:
     return s;
 }

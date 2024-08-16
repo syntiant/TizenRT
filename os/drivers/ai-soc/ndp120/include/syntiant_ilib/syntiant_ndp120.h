@@ -28,7 +28,7 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- 	** SDK: v112.2.0-Samsung **
+ 	** SDK: v112.3.2-Samsung **
 */
 #ifndef SYNTIANT_NDP120_H
 #define SYNTIANT_NDP120_H
@@ -59,6 +59,7 @@ extern "C" {
 #define SYNTIANT_NDP120_DEBUG_SECURE 0
 #define SYNTIANT_NDP120_DEBUG_NO_TOUCH  0
 #define SYNTIANT_NDP120_DEBUG_FLASH_BOOT  0
+#define SYNTIANT_NDP120_HEXDUMP 0
 
 #define PCM_AUDIO_SAMPLE_WIDTH_BITS 16
 #define PCM_AUDIO_SAMPLE_WIDTH_BYTES (PCM_AUDIO_SAMPLE_WIDTH_BITS/8)
@@ -109,6 +110,11 @@ enum syntiant_ndp120_ema_settings_e {
 enum syntiant_ndp120_spi_mcu_space_selector {
     SYNTIANT_NDP120_SPI = 0,
     SYNTIANT_NDP120_MCU = 1
+};
+
+enum syntiant_ndp120_audio_channel_cnt_e{
+    SINGLE_CHANNEL = 1,
+    TWO_CHANNELS = 2
 };
 
 #define OP_SIZE(mcu)    ((mcu) ? 4 : 1)
@@ -2024,6 +2030,19 @@ int syntiant_ndp120_read_dsp_tank_memory(struct syntiant_ndp_device_s *ndp,
 int syntiant_ndp120_config_dsp_tank_memory(struct syntiant_ndp_device_s *ndp,
                                        syntiant_ndp120_config_tank_t *config);
 
+/**
+ * @brief NDP120 checks the flow rules.
+ *
+ * Checks the flow rules and configure, based on the input type either SPI or PDM
+
+ * @param ndp NDP state object.
+ * @param input_type represents either SPI or PDM
+ * @return a @c SYNTIANT_NDP_ERROR_* code
+ */
+int syntiant_ndp120_config_flow_rules(struct syntiant_ndp_device_s *ndp,
+                            enum syntiant_ndp120_input_config_mode_e input_type);
+
+
 /* driver functions */
 
 /**
@@ -2629,17 +2648,44 @@ int syntiant_ndp120_config_auto_clock_scaling(struct syntiant_ndp_device_s *ndp,
 /** @brief Instruct DSP to initialize sensors without
  *         initializing gpios
  *  @param ndp NDP state object
+ * @return a @c SYNTIANT_NDP_ERROR_* code
  */
 int syntiant_ndp120_init_sensors(struct syntiant_ndp_device_s *ndp);
 
 /**
  * @brief get runtime audio parameters as computed by audio algorithms
  * @param ndp NDP state object
- * @params aparms computed audio parameters
+ * @param aparms computed audio parameters
  * @return a @c SYNTIANT_NDP_ERROR_* code
  */
 int syntiant_ndp120_get_audio_params(struct syntiant_ndp_device_s *ndp,
                                   struct ndp120_dsp_audio_params_s *aparams);
+int syntiant_ndp120_get_extract_sample_size(struct syntiant_ndp_device_s *ndp,
+    int spi_speed, uint32_t sample_size, int channels, uint32_t *extract_size);
+int syntiant_ndp120_get_active_configurations(struct syntiant_ndp_device_s *ndp,
+    int *active_channels);
+int syntiant_ndp120_dsp_get_info(struct syntiant_ndp_device_s *ndp);
+
+/**
+ * @brief get a posterior handler type for a given network
+ * @param ndp NDP state object
+ * @param nn_id network id
+ * @param ph_type posterior type of a given network
+ * @return a @c SYNTIANT_NDP_ERROR_* code
+ */
+int syntiant_ndp120_get_posterior_type(struct syntiant_ndp_device_s *ndp,
+                                  uint32_t nn_id, uint32_t *ph_type);
+
+/** @brief Set get input size for func or NN
+ * @param ndp NDP state object
+ * @param rule indicates the flow rule
+ * @param src_type indicates the src type of the flow rule
+ * @param input_size size to be configured
+ * @param set : 1 for set, 0 for get
+ */
+int syntiant_ndp120_set_get_input_size(struct syntiant_ndp_device_s *ndp,
+    const ndp120_dsp_data_flow_rule_t *rule, syntiant_ndp120_flow_src_type_t
+    src_type, uint32_t *input_size, uint32_t set);
 
 #ifdef __cplusplus
 }

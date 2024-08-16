@@ -28,7 +28,7 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- 	** SDK: v112.2.0-Samsung **
+ 	** SDK: v112.3.2-Samsung **
 */
 
 #include <syntiant_ilib/syntiant_portability.h>
@@ -2357,8 +2357,19 @@ syntiant_ndp120_config_i2s_no_sync(
                 frphasestep = 0;
             }
 
-            data = NDP120_DSP_CONFIG_PDMCFG_A_PDMFILTSTAGE2BYPASS_MASK_INSERT(data, (uint32_t)!frphasestep);
-            s = ndp_mcu_write(NDP120_DSP_CONFIG_PDMCFG_A(config->interface), data);
+            /* disable pdmfiltstage2bypass if using default sampling rate
+               of 16000 */
+            data = NDP120_DSP_CONFIG_PDMCFG_A_PDMFILTSTAGE2BYPASS_MASK_INSERT(
+                   data, (uint32_t)!frphasestep);
+            s = ndp_mcu_write(NDP120_DSP_CONFIG_PDMCFG_A(config->interface),
+                              data);
+            if (s) goto done;
+
+            s = ndp_mcu_read(NDP120_DSP_CONFIG_FARROWCFG(config->interface), &data);
+            if (s) goto done;
+
+            data = NDP120_DSP_CONFIG_FARROWCFG_FRPHASESTEP_MASK_INSERT(data, frphasestep);
+            s = ndp_mcu_write(NDP120_DSP_CONFIG_FARROWCFG(config->interface), data);
             if (s) goto done;
         }
 
