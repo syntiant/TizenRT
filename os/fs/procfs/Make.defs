@@ -70,6 +70,11 @@ ifeq ($(CONFIG_ARCH_BOARD_SIDK_S5JT200),y)
 CFLAGS+=-I$(TOPDIR)/../apps/include/netutils/wifi
 endif
 
+ifeq ($(CONFIG_AUDIO_NDP120),y)
+CSRCS += fs_procfsndp120.c
+CFLAGS += -I$(TOPDIR)/drivers/ai-soc/ndp120/include -I$(TOPDIR)/drivers/audio -DEXCLUDE_SYNTIANT_CORE_1
+endif
+
 # Include procfs build support
 
 DEPPATH += --dep-path procfs
