@@ -70,6 +70,9 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
+// TODO: remove again (only for debugging)
+#define CONFIG_DEBUG_AUDIO_INFO
+
 #define min(x, y) (((x) < (y)) ? (x) : (y))
 #define round_down(x, y) ((x) - ((x) % (y)))
 #define STRING_LEN		256
@@ -78,11 +81,18 @@
 #define AUDIO_BEFORE_MATCH_MS	(1500)
 
 /* when defined, the let the NDP use an external PDM clock */
-#define USE_EXTERNAL_PDM_CLOCK
+//#define USE_EXTERNAL_PDM_CLOCK
 #define EXTERNAL_PDM_CLOCK_PDM_RATE 1536000
 
 /* this is the higher bound of the keyword length, it will be rounded down to multiple of frame size */
 #define KEYWORD_BUFFER_LEN      (SYNTIANT_NDP120_AUDIO_SAMPLE_RATE * SYNTIANT_NDP120_AUDIO_SAMPLES_PER_WORD * AUDIO_BEFORE_MATCH_MS / 1000)
+
+#define NDP120_SPI_FREQ_HIGH    20000000
+
+/* NN IDs for wake word vs local command */
+#define KEYWORD_NETWORK_ID 0
+#define LOCAL_CMD_NETWORK_ID 1
+
 
 /****************************************************************************
  * Private Data
@@ -100,6 +110,7 @@ static unsigned int NDP120_AUDIO_CHANNELS = 1;
 static char s_label_data[NDP120_MCU_LABELS_MAX_LEN];
 static char *s_labels[MAX_LABELS];
 static unsigned int s_num_labels;
+static int serialno = 0;
 
 static struct work_s ndp120_work;
 
@@ -355,7 +366,7 @@ static int initialize_ndp(struct ndp120_dev_s *dev)
 	 * internal state for use by future syntiant_ndp*() API calls
 	 */
 	ndp = dev->ndp;
-
+	auddbg("NDP120 clock init\n");
 	/* enable xtal */
 	syntiant_ndp120_config_clk_xtal_t config_clk_xtal;
 	memset(&config_clk_xtal, 0, sizeof(config_clk_xtal));
@@ -382,6 +393,7 @@ static int initialize_ndp(struct ndp120_dev_s *dev)
 	config_clk_src.refsel = true;
 	s = syntiant_ndp120_config_clk_src(ndp, &config_clk_src);
 	check_status("config_clk_src", s);
+	auddbg("NDP120 clock init done\n");
 
 	return s;
 }
@@ -676,6 +688,8 @@ static int configure_audio(struct syntiant_ndp_device_s *ndp, unsigned int pdm_i
 
 	*sample_size = dsp_config.aud_samp_size_bytes;
 
+	auddbg("Sample size: %d   annotated: %d\n", *sample_size, *sample_size_orig_annot);
+
 errout_configure_audio:
 	return s;
 
@@ -761,145 +775,106 @@ void attach_algo_config_area(struct syntiant_ndp_device_s *ndp)
 }
 
 static
-int do_ndp120_flow_setup(struct syntiant_ndp_device_s *ndp,
-						syntiant_ndp120_flow_setup_t *flow_setup)
-{
-	int s = 0;
-
-	switch (flow_setup->action) {
-		case SYNTIANT_NDP120_FLOW_SETUP_RESET:
-			s = syntiant_ndp120_dsp_flow_setup_reset(&flow_setup->flow_setup);
-			break;
-		case SYNTIANT_NDP120_FLOW_SETUP_ADD_RULE:
-			s = syntiant_ndp120_dsp_flow_setup_add_rule(&flow_setup->flow_setup,
-				&flow_setup->rule, flow_setup->src_type);
-			break;
-		case SYNTIANT_NDP120_FLOW_SETUP_DEL_RULE:
-			s = syntiant_ndp120_dsp_flow_setup_del_rule(&flow_setup->flow_setup,
-				&flow_setup->rule, flow_setup->src_type);
-			break;
-		case SYNTIANT_NDP120_FLOW_SETUP_APPLY:
-			s = syntiant_ndp120_dsp_flow_setup_apply(ndp,
-				&flow_setup->flow_setup);
-			break;
-		case SYNTIANT_NDP120_FLOW_RULE_GET:
-			s = syntiant_ndp120_dsp_flow_setup_get(ndp,
-				&flow_setup->flow_setup);
-			break;
-	}
-	check_status("ndp flow_setup", s);
-
-	return s;
-}
-
-static
-int do_flow_src_dst(struct syntiant_ndp_device_s *ndp,
-					syntiant_ndp120_flow_setup_t *flow_setup,
-					syntiant_ndp120_flow_src_type_t src_type,
-					syntiant_ndp120_flow_src_param_t src_param,
-					syntiant_ndp120_flow_dst_type_t dst_type,
-					syntiant_ndp120_flow_dst_param_t dst_param,
-					int8_t algo_index)
-{
-	int s = 0;
-
-	flow_setup->rule.set_id = 0;
-	flow_setup->src_type = src_type;
-	flow_setup->rule.src_param = src_param;
-	flow_setup->rule.dst_type = dst_type;
-	flow_setup->rule.dst_param = dst_param;
-	flow_setup->rule.algo_config_index = algo_index;
-
-	flow_setup->action = SYNTIANT_NDP120_FLOW_SETUP_ADD_RULE;
-	s = do_ndp120_flow_setup(ndp, flow_setup);
-	if (s) {
-		auddbg("%s: %d: pcm %d -> func %d, ret %d\n",
-				__func__, __LINE__, src_param, dst_param, s);
-		goto out;
-	}
-out:
-	return s;
-}
-
-static
 void add_dsp_flow_rules(struct syntiant_ndp_device_s *ndp)
 {
 	int s = 0;
-	syntiant_ndp120_flow_setup_t driver_flow_setup = {};
+	ndp120_dsp_data_flow_setup_t setup = {0};
+	int input_size;
 
-	/* config dsp flow by clearing existing flow and setting up new flow */
-	/* clear existing flow rules */
-	driver_flow_setup.action = SYNTIANT_NDP120_FLOW_SETUP_RESET;
-	s = do_ndp120_flow_setup(ndp, &driver_flow_setup);
-	if (s) {
-		auddbg("%s: %d: ret %d\n", __func__, __LINE__, s);
-	}
+	/* PCM3->FUNC49 */
+	setup.src_pcm_audio[0].src_param = NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_STEREO;
+	setup.src_pcm_audio[0].dst_param = 49;
+	setup.src_pcm_audio[0].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_FUNCTION;
+	setup.src_pcm_audio[0].algo_config_index = 0;
+	setup.src_pcm_audio[0].set_id = 0;
+	setup.src_pcm_audio[0].algo_exec_property = 0;
 
-	/* add rule: pcm3:func49{0} */
-	s = do_flow_src_dst(ndp, &driver_flow_setup,
-							NDP120_DSP_DATA_FLOW_SRC_TYPE_PCM_AUDIO,
-							(syntiant_ndp120_flow_src_param_t) NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_STEREO,
-							NDP120_DSP_DATA_FLOW_DST_TYPE_FUNCTION,
-							(syntiant_ndp120_flow_dst_param_t) 49, 0);
-	if (s) {
-		auddbg("Cannot configure flows for pcm --> func, err:%d\n", s);
-	}
+	/* FUNC49->NN0 */
+	setup.src_function[0].src_param = 49;
+	setup.src_function[0].dst_param = KEYWORD_NETWORK_ID;
+	setup.src_function[0].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_NN;
+	setup.src_function[0].algo_config_index = -1;
+	setup.src_function[0].set_id = 0;
+	setup.src_function[0].algo_exec_property = 0;
 
-	/* add rule: func49:nn0 */
-	s = do_flow_src_dst(ndp, &driver_flow_setup,
-						NDP120_DSP_DATA_FLOW_SRC_TYPE_FUNCTION,
-						(syntiant_ndp120_flow_src_param_t) 49,
-						NDP120_DSP_DATA_FLOW_DST_TYPE_NN,
-						NDP120_DSP_DATA_FLOW_DST_PARAM_UNSPECIFIED, 0);
-	if (s) {
-		auddbg("Cannot configure flows for func --> nn, err:%d\n", s);
-	}
+	/* FUNC49->HOST_EXT_AUDIO */
+	setup.src_function[1].src_param = 49;
+	setup.src_function[1].dst_param = NDP120_DSP_DATA_FLOW_DST_SUBTYPE_AUDIO;
+	setup.src_function[1].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT;
+	setup.src_function[1].algo_config_index = -1;
+	setup.src_function[1].set_id = 0;
+	setup.src_function[1].algo_exec_property = 0;
 
-	/* add rule: nn0:mcu */
-	s = do_flow_src_dst(ndp, &driver_flow_setup,
-						NDP120_DSP_DATA_FLOW_SRC_TYPE_NN,
-						(syntiant_ndp120_flow_src_param_t) 0,
-						NDP120_DSP_DATA_FLOW_DST_TYPE_MCU,
-						NDP120_DSP_DATA_FLOW_DST_PARAM_UNSPECIFIED, -1);
-	if (s) {
-		auddbg("Cannot configure flows for nn --> mcu, err:%d\n", s);
-	}
+	/* FUNC49->FUNC254 */
+	setup.src_function[2].src_param = 49;
+	setup.src_function[2].dst_param = 254;
+	setup.src_function[2].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_FUNCTION;
+	setup.src_function[2].algo_config_index = -1;
+	setup.src_function[2].set_id = 0;
+	setup.src_function[2].algo_exec_property = SYNTIANT_NDP120_DSP_FLOW_MISC_INPUT_SIZE;
+
+	/* FUNC254->NN1 */
+	setup.src_function[3].src_param = 254;
+	setup.src_function[3].dst_param = LOCAL_CMD_NETWORK_ID;
+	setup.src_function[3].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_NN;
+	setup.src_function[3].algo_config_index = -1;
+	setup.src_function[3].set_id = 0;
+	setup.src_function[3].algo_exec_property = SYNTIANT_NDP120_DSP_FLOW_MISC_INPUT_SIZE;
+
+	/* NN0->MCU */
+	setup.src_nn[0].src_param = 0;
+	setup.src_nn[0].dst_param = 0;
+	setup.src_nn[0].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_MCU;
+	setup.src_nn[0].algo_config_index = -1;
+	setup.src_nn[0].set_id = 0;
+	setup.src_nn[0].algo_exec_property = 0;
+
+	/* NN1->MCU */
+	setup.src_nn[1].src_param = 1;
+	setup.src_nn[1].dst_param = 0;
+	setup.src_nn[1].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_MCU;
+	setup.src_nn[1].algo_config_index = -1;
+	setup.src_nn[1].set_id = 0;
+	setup.src_nn[1].algo_exec_property = 0;
+
+	printf("applied flow rules\n");
+	s = syntiant_ndp120_dsp_flow_setup_apply(ndp, &setup);
+	check_status("syntiant_ndp120_dsp_flow_setup_apply", s);
+
+	/* input size of 320 for FUNC49->FUNC254 */
+	input_size = 320;
+	printf("added input size 320 for func49->func254\n");
+	s = syntiant_ndp120_set_get_input_size(ndp, &setup.src_function[2],
+		NDP120_DSP_DATA_FLOW_SRC_TYPE_FUNCTION, &input_size, 1);
+	check_status("syntiant_ndp120_set_get_input_size FUNC49->FUNC254 ", s);
+
+    /* input size of 144 for FUNC254->NN1 */
+    input_size = 144;
+    printf("added input size 144 for func254->nn1\n");
+    s = syntiant_ndp120_set_get_input_size(ndp, &setup.src_function[3],
+			NDP120_DSP_DATA_FLOW_SRC_TYPE_FUNCTION, &input_size, 1);
+	check_status("syntiant_ndp120_set_get_input_size FUNC254->NN1 ", s);
 
 #if 0
-	/* this rule is only needed to extract the raw mic input, typically used only during validation */
-	/* add rule: pcm3:host_ext_audio */
-	s = do_flow_src_dst(ndp, &driver_flow_setup,
-							NDP120_DSP_DATA_FLOW_SRC_TYPE_PCM_AUDIO,
-							NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_LEFT, /*NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_STEREO,*/
-							NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT,
-							NDP120_DSP_DATA_FLOW_DST_SUBTYPE_AUDIO, -1);
-	if (s) {
-		fprintf(stderr, "Cannot configure flows for pcm --> host ext, err:%d\n", s);
-	}
-#else
-
-	/* add rule: func49:host_ext_audio{0} */
-	s = do_flow_src_dst(ndp, &driver_flow_setup,
-						NDP120_DSP_DATA_FLOW_SRC_TYPE_FUNCTION,
-						(syntiant_ndp120_flow_src_param_t) 49,
-						NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT,
-						NDP120_DSP_DATA_FLOW_DST_SUBTYPE_AUDIO, 0);
-	if (s) {
-		auddbg("Cannot configure flows for func --> host ext, err:%d\n", s);
-	}
-#endif
-
-
-	/* save rules in DSP memory */
-	driver_flow_setup.action = SYNTIANT_NDP120_FLOW_SETUP_APPLY;
-	s = do_ndp120_flow_setup(ndp, &driver_flow_setup);
-	if (s) {
-		auddbg("%s: %d: ret %d\n", __func__, __LINE__, s);
-	}
-
 	/* DSP restart */
 	s = syntiant_ndp120_dsp_restart(ndp);
 	check_status("syntiant_ndp120_dsp_restart", s);
+#endif
+}
+
+static
+void attach_custom_posterior_handler(struct syntiant_ndp_device_s *ndp)
+{
+	int s = SYNTIANT_NDP_ERROR_NONE;
+	struct syntiant_posterior_handler_s *cfg;
+	static unsigned buf[sizeof(*cfg) + SYNTIANT_POSTERIOR_HANDLER_DATA_MAXLEN];
+	cfg = (struct syntiant_posterior_handler_s *)buf;
+
+	cfg->id = 1;
+	cfg->op = NDP120_PH_OP_ATTACH_NN;
+	cfg->nn_id = LOCAL_CMD_NETWORK_ID;
+	s = syntiant_ndp120_custom_posterior_handler(ndp, cfg);
+	check_status("syntiant_ndp120_custom_posterior_handler", s);
 }
 
 /****************************************************************************
@@ -918,9 +893,9 @@ int ndp120_init(struct ndp120_dev_s *dev)
 	/* File names */
 	int s;
 
-	const char *mcu_package = "/mnt/kernel/audio/mcu_fw";
-	const char *dsp_package = "/mnt/kernel/audio/dsp_fw";
-	const char *neural_package = "/mnt/kernel/audio/kd_local";
+	const char *mcu_package = "/mnt/ndp120/mcu_fw";
+	const char *dsp_package = "/mnt/ndp120/dsp_fw";
+	const char *neural_package = "/mnt/ndp120/kd_local";
 
 	const unsigned int AUDIO_TANK_MS =
 		AUDIO_BEFORE_MATCH_MS  /* max word length + ~500 MS preroll */
@@ -949,6 +924,9 @@ int ndp120_init(struct ndp120_dev_s *dev)
 		goto errout_ndp120_init;
 	}
 
+	auddbg("Changing SPI speed to %dMHz\n", NDP120_SPI_FREQ_HIGH);
+	dev->lower->spi_config.freq = NDP120_SPI_FREQ_HIGH;
+
 	/*
 	 * load M0, Xtensa and Syntiant Core 2 firmware neural network
 	 * perform audio & neural agorithm and associated NDP configuration
@@ -973,6 +951,7 @@ int ndp120_init(struct ndp120_dev_s *dev)
 
 	attach_algo_config_area(dev->ndp);
 	add_dsp_flow_rules(dev->ndp);
+	attach_custom_posterior_handler(dev->ndp);
 
 #if defined(USE_EXTERNAL_PDM_CLOCK)	
 	s = configure_audio(dev->ndp, DMIC_1536KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &audio_frame_bytes, &dev->sample_size_orig_annot);
@@ -1008,7 +987,7 @@ int ndp120_irq_handler_work(struct ndp120_dev_s *dev)
 	uint32_t notifications = 0; /*initialize this as this is checked if io wait fails and might return wrong results if it holds garbage value*/
 	uint32_t summary;
 	unsigned int winner;
-	int s, serialno = 0;
+	int s = SYNTIANT_NDP_ERROR_NONE;
 	uint32_t network_id;
 	int ret = SYNTIANT_NDP_ERROR_NONE;
 
@@ -1056,11 +1035,11 @@ int ndp120_irq_handler_work(struct ndp120_dev_s *dev)
 			auddbg("#################### winner : %d summary : %d network_id : %d\n", winner, summary, network_id);
 			/* TODO Local command also need to be handled here */
 			switch(network_id) {
-				case 0:
+				case KEYWORD_NETWORK_ID:
 					serialno++;
 					auddbg("[#%d Hi-Bixby] matched: %s\n", serialno, dev->labels_per_network[network_id][winner]);
 					break;
-				case 1:
+				case LOCAL_CMD_NETWORK_ID:
 					auddbg("[#%d Voice Commands] matched: %s\n", serialno, dev->labels_per_network[network_id][winner]);
 					break;
 				default:
@@ -1070,24 +1049,14 @@ int ndp120_irq_handler_work(struct ndp120_dev_s *dev)
 			struct audio_msg_s msg;
 			msg.u.pPtr = NULL;
 			msg.msgId = AUDIO_MSG_NONE;
-			if (network_id == 0 && !dev->recording) {
+			if (network_id == KEYWORD_NETWORK_ID && !dev->recording) {
 				include_keyword = true;
 				msg.msgId = AUDIO_MSG_KD;
-			} else if (network_id == 1) {
-				switch (winner) {
-				case 0:
-					msg.msgId = AUDIO_MSG_LOCAL0;
-					break;
-				case 1:
-					msg.msgId = AUDIO_MSG_LOCAL1;
-					break;
-				case 2:
-					msg.msgId = AUDIO_MSG_LOCAL2;
-					break;
-				case 3:
-					msg.msgId = AUDIO_MSG_LOCAL3;
-					break;
-				default:
+			} else if (network_id == LOCAL_CMD_NETWORK_ID) {
+				if ((0 <= winner) && (winner <= 7)) {
+					/* assumes consecutive message IDs for AUDIO_MSG_LOCAL */
+					msg.msgId = AUDIO_MSG_LOCAL0 + winner;
+				} else {
 					ret = SYNTIANT_NDP_ERROR_INVALID_NETWORK;
 					goto errout_with_irq;
 				}
@@ -1138,19 +1107,15 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 		/* wait for MPF interrupt */
 		sem_wait(&dev->sample_ready_signal);
 
-		uint32_t sample_size = dev->sample_size_orig_annot;
+		uint32_t sample_size = dev->sample_size;
 		s = SYNTIANT_NDP_ERROR_NONE;
 		do {
 			s = syntiant_ndp_extract_data(dev->ndp,
-				SYNTIANT_NDP_EXTRACT_TYPE_INPUT_ANNOTATED,
+				SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
 				SYNTIANT_NDP_EXTRACT_FROM_UNREAD, data_annot, &sample_size);
 		} while (s == SYNTIANT_NDP_ERROR_DATA_REREAD);
 
-		if (sample_size > sizeof(ndp120_dsp_audio_sample_annotation_t)) {
-			sample_size -= sizeof(ndp120_dsp_audio_sample_annotation_t);
-		}
-	
-		memcpy(audio_out_buffer, data_annot + sizeof(ndp120_dsp_audio_sample_annotation_t), sample_size);
+		memcpy(audio_out_buffer, data_annot, sample_size);
 	}
 
 	return SYNTIANT_NDP_ERROR_NONE;

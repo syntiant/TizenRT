@@ -137,9 +137,14 @@ void HardwareKeywordDetector::detectKeyword(void)
 	audio_manager_result_t result = get_device_process_handler_message(mSdCard, mSdDevice, &msgId);
 
 	if (result == AUDIO_MANAGER_SUCCESS) {
-		/* TODO Local Local Command value will be received here */
 		if (msgId == AUDIO_DEVICE_SPEECH_DETECT_KD) {
 			medvdbg("#### KD DETECTED!! ####\n");
+			mSpeechResultCallback((audio_device_process_unit_subtype_e)msgId);
+			mKeywordDetectStarted = false;
+		}
+		/* TODO Check this simple implementation  */
+		if (msgId >= AUDIO_DEVICE_SPEECH_DETECT_LOCAL0 && msgId <= AUDIO_DEVICE_SPEECH_DETECT_LOCAL7) {
+			medvdbg("#### LOCAL COMMAND (id %d) DETECTED!! ####\n", msgId);
 			mSpeechResultCallback((audio_device_process_unit_subtype_e)msgId);
 			mKeywordDetectStarted = false;
 		}

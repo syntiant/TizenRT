@@ -203,6 +203,7 @@ static ssize_t ndp120_proc_read(FAR struct file *filep, FAR char *buffer, size_t
 	int i, s;
 	ndp120_dsp_counters_t dsp_cnts;
 	int flowset_id;
+	uint32_t data;
 
 	fvdbg("buffer=%p buflen=%d\n", buffer, (int)buflen);
 
@@ -250,6 +251,10 @@ static ssize_t ndp120_proc_read(FAR struct file *filep, FAR char *buffer, size_t
 
 	ADD_LINE("KD Enabled: %d\n",ndp_debug_handle->kd_enabled);
 
+	for (i = 0; i < NDP120_DSP_CONFIG_BUFFILLLEVEL_COUNT; i++) {
+		ndp_mcu_read(NDP120_DSP_CONFIG_BUFFILLLEVEL(i), &data);
+		ADD_LINE("BUFFILLLEVEL[%d]: 0x%X\n", i, data);
+	}
 end:
 	if (totalsize > 0) {
 		filep->f_pos += totalsize;

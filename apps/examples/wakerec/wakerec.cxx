@@ -183,6 +183,9 @@ public:
 			// do nothing
 		} else if (event == SPEECH_DETECT_NONE) {
 			printf("Event SPEECH_DETECT_NO_EPD\n");
+		} else if ((SPEECH_DETECT_LOCAL0 <= event) && (event <= SPEECH_DETECT_LOCAL7)) {
+			printf("Local command id %d detected\n", event - SPEECH_DETECT_LOCAL0);
+			sd->startKeywordDetect();
 		} else {
 			printf("Event not valid\n");
 		}

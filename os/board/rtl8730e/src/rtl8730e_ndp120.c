@@ -48,7 +48,7 @@
 
 /* spi config */
 #define NDP120_SPI_PORT			0
-#define NDP120_SPI_FREQ			12000000
+#define NDP120_SPI_FREQ			1000000
 #define NDP120_SPI_BPW			8
 #define NDP120_SPI_CS			0
 #define NDP120_SPI_MODE			SPIDEV_MODE0
@@ -162,11 +162,13 @@ int rtl8730e_ndp120_initialize(int minor)
 		 * should be set always before the transfers and must be
 		 * passed to lower level using spi_config in ndp120_lower_s.
 		 */
+		auddbg("SPI init: %dMhz\n", NDP120_SPI_FREQ);
 		FAR struct spi_dev_s *spi = up_spiinitialize(NDP120_SPI_PORT);
 		
 		SPI_SETMODE(spi, NDP120_SPI_MODE);
 		SPI_SETFREQUENCY(spi, NDP120_SPI_FREQ);
 		SPI_SETBITS(spi, NDP120_SPI_BPW);
+		auddbg("SPI initialization done\n");
 		
 		ndp120 = ndp120_lowerhalf_initialize(spi, &g_ndp120info.lower);
 		if (ndp120 == NULL) {
