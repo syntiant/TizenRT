@@ -29,7 +29,7 @@
  *  process, and are protected by trade secret or copyright law.  Dissemination
  *  of this information or reproduction of this material is strictly forbidden
  *  unless prior written permission is obtained from Syntiant Corporation.
-	** SDK: v104 **
+	** SDK: v112.3.2-Samsung **
 */
 
 /****************************************************************************
@@ -110,7 +110,7 @@ static unsigned int NDP120_AUDIO_CHANNELS = 1;
 static char s_label_data[NDP120_MCU_LABELS_MAX_LEN];
 static char *s_labels[MAX_LABELS];
 static unsigned int s_num_labels;
-static int serialno = 0;
+static int matches = 0;
 
 static struct work_s ndp120_work;
 
@@ -120,7 +120,7 @@ static bool include_keyword = false;
 static uint8_t keyword_buffer[KEYWORD_BUFFER_LEN];
 
 /* variable to keep track of data left in the keyword buffer */
-static volatile uint32_t keyword_bytes_left;
+static volatile uint32_t keyword_bytes_left = 0;
 
 /* only used for debugging purposes */
 static struct ndp120_dev_s *_ndp_debug_handle = NULL;
@@ -568,7 +568,8 @@ static int get_versions_and_labels(struct syntiant_ndp_device_s *ndp,
 }
 
 static int configure_audio(struct syntiant_ndp_device_s *ndp, unsigned int pdm_in_shift,
-				unsigned int audio_tank_ms, unsigned int *sample_size, unsigned int *sample_size_orig_annot)
+				unsigned int audio_tank_ms, unsigned int *sample_size, unsigned int *sample_size_orig_annot, 
+				unsigned int *extract_size)
 {
 	const unsigned int PDM_MAX_OUT_SHIFT = 7; /* always set to max */
 	struct syntiant_ndp120_config_decimation_s decimation_config;
@@ -687,6 +688,18 @@ static int configure_audio(struct syntiant_ndp_device_s *ndp, unsigned int pdm_i
 
 	auddbg("Sample size: %d   annotated: %d\n", *sample_size, *sample_size_orig_annot);
 
+	int channels_active;
+	s = syntiant_ndp120_get_active_configurations(ndp, &channels_active);
+	if (check_status("syntiant_ndp120_get_active_configurations", s)) {
+		goto errout_configure_audio;
+	}
+	s = syntiant_ndp120_get_extract_sample_size(ndp, NDP120_SPI_FREQ_HIGH, *sample_size, channels_active, extract_size);
+	if (check_status("syntiant_ndp120_get_extract_sample_size", s)) {
+		goto errout_configure_audio;
+	}
+
+	auddbg("Channels active: 0x%x  extract_size = %d\n", channels_active, *extract_size);
+
 errout_configure_audio:
 	return s;
 
@@ -738,40 +751,6 @@ void dsp_flow_show(struct syntiant_ndp_device_s *ndp)
 #endif	/* CONFIG_DEBUG_AUDIO_INFO */
 
 static
-void attach_algo_config_area(struct syntiant_ndp_device_s *ndp)
-{
-	int s = SYNTIANT_NDP_ERROR_NONE;
-	ndp120_dsp_algo_t algos[NDP120_DSP_ALGO_MAX_COUNT];
-
-	memset(algos, 0, sizeof(algos));
-
-	/* read algo bindings */
-	s = syntiant_ndp120_read_write_algo_bindings(ndp, algos,
-												 sizeof(algos), 1);
-	if (s == SYNTIANT_NDP_ERROR_NONE) {
-		for (uint8_t algo = 0; algo < NDP120_DSP_ALGO_MAX_COUNT; algo++) {
-			if (algos[algo].algo_id == 49) {
-				/* write algo bindings for the given algo id */
-				algos[algo].algo_config_index = 0;
-				s = syntiant_ndp120_read_write_algo_bindings(ndp,
-						algos, sizeof(algos), 0);
-				if (s != SYNTIANT_NDP_ERROR_NONE) {
-					auddbg("failed to write algo bindings\n");
-				}
-				check_status("write algo_bindings", s);
-				auddbg("algo_id: %d, algo_config_index: %d, init status: %d\n",
-					algos[algo].algo_id,
-					algos[algo].algo_config_index,
-					algos[algo].algo_init_status);
-			}
-		}
-	}
-	else {
-		auddbg("failed to read algo bindings\n");
-	}
-}
-
-static
 void add_dsp_flow_rules(struct syntiant_ndp_device_s *ndp)
 {
 	int s = 0;
@@ -798,7 +777,7 @@ void add_dsp_flow_rules(struct syntiant_ndp_device_s *ndp)
 	setup.src_function[1].src_param = 49;
 	setup.src_function[1].dst_param = NDP120_DSP_DATA_FLOW_DST_SUBTYPE_AUDIO;
 	setup.src_function[1].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT;
-	setup.src_function[1].algo_config_index = -1;
+	setup.src_function[1].algo_config_index = 0;
 	setup.src_function[1].set_id = 0;
 	setup.src_function[1].algo_exec_property = 0;
 
@@ -899,8 +878,6 @@ int ndp120_init(struct ndp120_dev_s *dev)
 		+ 300  /* posterior latency of <= 24 MS/frame * 12 frames == 288 MS */
 		+ 100; /* generous allowance for RTL8730E match-to-extract time */
 
-	unsigned int audio_frame_bytes = 768; /* 768 is a reasonable default */
-
 	/*const unsigned int DMIC_768KHZ_PDM_IN_SHIFT = 13;*/  /* currently unused */
 	const unsigned int DMIC_768KHZ_PDM_IN_SHIFT_FF = 8;
 	const unsigned int DMIC_1536KHZ_PDM_IN_SHIFT_FF = 3;
@@ -910,7 +887,6 @@ int ndp120_init(struct ndp120_dev_s *dev)
 
 	sem_init(&dev->mailbox_signal, 1, 0);
 	sem_init(&dev->sample_ready_signal, 1, 0);
-
 	sem_setprotocol(&dev->mailbox_signal, SEM_PRIO_NONE);
 	sem_setprotocol(&dev->sample_ready_signal, SEM_PRIO_NONE);
 
@@ -921,7 +897,7 @@ int ndp120_init(struct ndp120_dev_s *dev)
 		goto errout_ndp120_init;
 	}
 
-	auddbg("Changing SPI speed to %dMHz\n", NDP120_SPI_FREQ_HIGH);
+	auddbg("Changing SPI speed to %dHz\n", NDP120_SPI_FREQ_HIGH);
 	dev->lower->spi_config.freq = NDP120_SPI_FREQ_HIGH;
 
 	/*
@@ -946,14 +922,13 @@ int ndp120_init(struct ndp120_dev_s *dev)
 		goto errout_ndp120_init;
 	}
 
-	attach_algo_config_area(dev->ndp);
 	add_dsp_flow_rules(dev->ndp);
 	attach_custom_posterior_handler(dev->ndp);
 
 #if defined(USE_EXTERNAL_PDM_CLOCK)	
-	s = configure_audio(dev->ndp, DMIC_1536KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &audio_frame_bytes, &dev->sample_size_orig_annot);
+	s = configure_audio(dev->ndp, DMIC_1536KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &dev->sample_size, &dev->sample_size_orig_annot, &dev->extract_size);
 #else
-	s = configure_audio(dev->ndp, DMIC_768KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &dev->sample_size, &dev->sample_size_orig_annot);
+	s = configure_audio(dev->ndp, DMIC_768KHZ_PDM_IN_SHIFT_FF, AUDIO_TANK_MS, &dev->sample_size, &dev->sample_size_orig_annot, &dev->extract_size);
 #endif
 	if (s) {
 		auddbg("audio configure failed\n");
@@ -1033,11 +1008,12 @@ int ndp120_irq_handler_work(struct ndp120_dev_s *dev)
 			/* TODO Local command also need to be handled here */
 			switch(network_id) {
 				case KEYWORD_NETWORK_ID:
-					serialno++;
-					auddbg("[#%d Hi-Bixby] matched: %s\n", serialno, dev->labels_per_network[network_id][winner]);
+					matches++;
+					auddbg("[#%d Hi-Bixby] matched: %s\n", matches, dev->labels_per_network[network_id][winner]);
 					break;
 				case LOCAL_CMD_NETWORK_ID:
-					auddbg("[#%d Voice Commands] matched: %s\n", serialno, dev->labels_per_network[network_id][winner]);
+					matches++;
+					auddbg("[#%d Voice Commands] matched: %s\n", matches, dev->labels_per_network[network_id][winner]);
 					break;
 				default:
 					break;
@@ -1084,6 +1060,14 @@ int ndp120_set_sample_ready_int(struct ndp120_dev_s *dev, int on)
 	return s;
 }
 
+static uint32_t get_time_ms(void)
+{
+	struct timeval  tv;
+	gettimeofday(&tv, NULL);
+
+	return (uint32_t) (tv.tv_sec * 1000 + tv.tv_usec / 1000);
+}
+
 int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 			  unsigned int total_bytes)
 {
@@ -1101,7 +1085,7 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 		keyword_bytes_left -= dev->sample_size;
 		return SYNTIANT_NDP_ERROR_NONE;
 	} else {
-		/* wait for MPF interrupt */
+		/* wait for sample ready interrupt */
 		sem_wait(&dev->sample_ready_signal);
 
 		uint32_t sample_size = dev->sample_size;
@@ -1111,7 +1095,7 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 				SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
 				SYNTIANT_NDP_EXTRACT_FROM_UNREAD, audio_out_buffer, &sample_size);
 		} while (s == SYNTIANT_NDP_ERROR_DATA_REREAD);
-
+		//auddbg("[%d] extracted %d bytes @ %lu ms\n", getpid(), sample_size, get_time_ms());
 	}
 
 	return SYNTIANT_NDP_ERROR_NONE;
@@ -1167,7 +1151,7 @@ int ndp120_start_sample_ready(struct ndp120_dev_s *dev)
 		unsigned int extract_bytes = dev->keyword_bytes;
 		s = syntiant_ndp_extract_data(dev->ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
 								SYNTIANT_NDP_EXTRACT_FROM_MATCH, (uint8_t *)keyword_buffer,
-								&dev->keyword_bytes);
+								&extract_bytes);
 		if (check_status("extract match", s)) {
 			return s;
 		}
