@@ -1118,14 +1118,10 @@ int ndp120_irq_handler(struct ndp120_dev_s *dev)
 	return work_queue(HPWORK, &ndp120_work, ndp120_irq_handler_work, (void *)dev, 0);
 }
 
-int ndp120_set_match_per_frame(struct ndp120_dev_s *dev, int on)
+int ndp120_set_sample_ready_int(struct ndp120_dev_s *dev, int on)
 {
 	int s;
-	syntiant_ndp120_config_misc_t ndp120_config;
- 	memset(&ndp120_config, 0, sizeof(ndp120_config));
-	ndp120_config.set = SYNTIANT_NDP120_CONFIG_SET_MISC_MATCH_PER_FRAME_ON;
-	ndp120_config.match_per_frame_on = on;
-	s = syntiant_ndp120_config_misc(dev->ndp, &ndp120_config);
+	s = syntiant_ndp120_config_notify_on_sample_ready(dev->ndp, on);
 	return s;
 }
 
@@ -1144,10 +1140,6 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 	if (keyword_bytes_left != 0) {
 		memcpy(audio_out_buffer, &keyword_buffer[dev->keyword_bytes - keyword_bytes_left], dev->sample_size);
 		keyword_bytes_left -= dev->sample_size;
-		if (keyword_bytes_left == 0) {
-			/* turn on MPF interrutps */
-			s =  ndp120_set_match_per_frame(dev, 1);
-		}
 		return SYNTIANT_NDP_ERROR_NONE;
 	} else {
 		/* wait for MPF interrupt */
@@ -1215,6 +1207,8 @@ int ndp120_start_sample_ready(struct ndp120_dev_s *dev)
 
 	dev->recording = true;
 
+	s =  ndp120_set_sample_ready_int(dev, 1);
+
 	if (include_keyword) {
 		unsigned int extract_bytes = dev->keyword_bytes;
 		s = syntiant_ndp_extract_data(dev->ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
@@ -1229,13 +1223,13 @@ int ndp120_start_sample_ready(struct ndp120_dev_s *dev)
 		include_keyword = false;
 	}
 
-	return SYNTIANT_NDP_ERROR_NONE;
+	return s;
 }
 
 int ndp120_stop_sample_ready(struct ndp120_dev_s *dev)
 {
 	int s;
-	s = ndp120_set_match_per_frame(dev, 0);
+	s = ndp120_set_sample_ready_int(dev, 0);
 
 	dev->recording = false;
 
