@@ -125,9 +125,6 @@ static volatile uint32_t keyword_bytes_left;
 /* only used for debugging purposes */
 static struct ndp120_dev_s *_ndp_debug_handle = NULL;
 
-/* buffer used for extracted annotated audio data */
-static uint8_t data_annot[2048];
-
 static int check_status(char *message, int s)
 {
 	if (s) {
@@ -1112,10 +1109,9 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 		do {
 			s = syntiant_ndp_extract_data(dev->ndp,
 				SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
-				SYNTIANT_NDP_EXTRACT_FROM_UNREAD, data_annot, &sample_size);
+				SYNTIANT_NDP_EXTRACT_FROM_UNREAD, audio_out_buffer, &sample_size);
 		} while (s == SYNTIANT_NDP_ERROR_DATA_REREAD);
 
-		memcpy(audio_out_buffer, data_annot, sample_size);
 	}
 
 	return SYNTIANT_NDP_ERROR_NONE;
