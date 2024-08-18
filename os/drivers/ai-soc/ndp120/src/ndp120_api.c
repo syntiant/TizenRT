@@ -757,32 +757,32 @@ void add_dsp_flow_rules(struct syntiant_ndp_device_s *ndp)
 	ndp120_dsp_data_flow_setup_t setup = {0};
 	int input_size;
 
-	/* PCM3->FUNC49 */
+	/* PCM3->FUNC13 */
 	setup.src_pcm_audio[0].src_param = NDP120_DSP_DATA_FLOW_SRC_PARAM_AUD0_STEREO;
-	setup.src_pcm_audio[0].dst_param = 49;
+	setup.src_pcm_audio[0].dst_param = 13;
 	setup.src_pcm_audio[0].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_FUNCTION;
 	setup.src_pcm_audio[0].algo_config_index = 0;
 	setup.src_pcm_audio[0].set_id = 0;
 	setup.src_pcm_audio[0].algo_exec_property = 0;
 
-	/* FUNC49->NN0 */
-	setup.src_function[0].src_param = 49;
+	/* FUNC13->NN0 */
+	setup.src_function[0].src_param = 13;
 	setup.src_function[0].dst_param = KEYWORD_NETWORK_ID;
 	setup.src_function[0].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_NN;
 	setup.src_function[0].algo_config_index = -1;
 	setup.src_function[0].set_id = 0;
 	setup.src_function[0].algo_exec_property = 0;
 
-	/* FUNC49->HOST_EXT_AUDIO */
-	setup.src_function[1].src_param = 49;
+	/* FUNC13->HOST_EXT_AUDIO */
+	setup.src_function[1].src_param = 13;
 	setup.src_function[1].dst_param = NDP120_DSP_DATA_FLOW_DST_SUBTYPE_AUDIO;
 	setup.src_function[1].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_HOST_EXTRACT;
 	setup.src_function[1].algo_config_index = 0;
 	setup.src_function[1].set_id = 0;
 	setup.src_function[1].algo_exec_property = 0;
 
-	/* FUNC49->FUNC254 */
-	setup.src_function[2].src_param = 49;
+	/* FUNC13->FUNC254 */
+	setup.src_function[2].src_param = 13;
 	setup.src_function[2].dst_param = 254;
 	setup.src_function[2].dst_type = NDP120_DSP_DATA_FLOW_DST_TYPE_FUNCTION;
 	setup.src_function[2].algo_config_index = -1;
@@ -817,12 +817,12 @@ void add_dsp_flow_rules(struct syntiant_ndp_device_s *ndp)
 	s = syntiant_ndp120_dsp_flow_setup_apply(ndp, &setup);
 	check_status("syntiant_ndp120_dsp_flow_setup_apply", s);
 
-	/* input size of 320 for FUNC49->FUNC254 */
+	/* input size of 320 for FUNC13->FUNC254 */
 	input_size = 320;
-	printf("added input size 320 for func49->func254\n");
+	printf("added input size 320 for func13->func254\n");
 	s = syntiant_ndp120_set_get_input_size(ndp, &setup.src_function[2],
 		NDP120_DSP_DATA_FLOW_SRC_TYPE_FUNCTION, &input_size, 1);
-	check_status("syntiant_ndp120_set_get_input_size FUNC49->FUNC254 ", s);
+	check_status("syntiant_ndp120_set_get_input_size FUNC13->FUNC254 ", s);
 
     /* input size of 144 for FUNC254->NN1 */
     input_size = 144;
@@ -880,7 +880,7 @@ int ndp120_init(struct ndp120_dev_s *dev)
 
 	/*const unsigned int DMIC_768KHZ_PDM_IN_SHIFT = 13;*/  /* currently unused */
 	const unsigned int DMIC_768KHZ_PDM_IN_SHIFT_FF = 8;
-	const unsigned int DMIC_1536KHZ_PDM_IN_SHIFT_FF = 3;
+	const unsigned int DMIC_1536KHZ_PDM_IN_SHIFT_FF = 6;
 
 	/* save handle so we can use it from debug routine later, e.g. from other util/shell */
 	_ndp_debug_handle = dev;
