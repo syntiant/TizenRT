@@ -177,9 +177,8 @@ public:
 		if (event == SPEECH_DETECT_KD) {
 			printf("Event SPEECH_DETECT_KD\n");
 			printf("#### [SD] keyword detected.\n");
-			//sd->stopKeywordDetect();
-			//startRecord();
-			sd->startKeywordDetect();
+			sd->stopKeywordDetect();
+			startRecord();
 		} else if (event == SPEECH_DETECT_EPD) {
 			// do nothing
 		} else if (event == SPEECH_DETECT_NONE) {

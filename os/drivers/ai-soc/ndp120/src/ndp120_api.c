@@ -77,7 +77,6 @@
 #define round_down(x, y) ((x) - ((x) % (y)))
 #define STRING_LEN		256
 
-/* currently the max size of tank is limited to ~580ms  */
 #define AUDIO_BEFORE_MATCH_MS	(1500)
 
 /* when defined, the let the NDP use an external PDM clock */
@@ -874,9 +873,8 @@ int ndp120_init(struct ndp120_dev_s *dev)
 	const char *neural_package = "/mnt/ndp120/kd_local";
 
 	const unsigned int AUDIO_TANK_MS =
-		AUDIO_BEFORE_MATCH_MS  /* max word length + ~500 MS preroll */
-		+ 300  /* posterior latency of <= 24 MS/frame * 12 frames == 288 MS */
-		+ 100; /* generous allowance for RTL8730E match-to-extract time */
+		AUDIO_BEFORE_MATCH_MS  /* ~max word length + ~500 MS preroll */
+		+ 400; /* headroom */
 
 	/*const unsigned int DMIC_768KHZ_PDM_IN_SHIFT = 13;*/  /* currently unused */
 	const unsigned int DMIC_768KHZ_PDM_IN_SHIFT_FF = 8;
@@ -937,6 +935,8 @@ int ndp120_init(struct ndp120_dev_s *dev)
 
 	dev->keyword_bytes = KEYWORD_BUFFER_LEN;
 	dev->keyword_bytes = round_down(dev->keyword_bytes, dev->sample_size);
+
+	auddbg("keyword bytes: %d\n", dev->keyword_bytes);
 
 	s_num_labels = 16;
 	s = get_versions_and_labels(dev->ndp, s_label_data, sizeof(s_label_data), s_labels, &s_num_labels);
@@ -1081,6 +1081,7 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 	 */
 
 	if (keyword_bytes_left != 0) {
+		//auddbg("[%d] audio pointer %d bytes @ %lu ms\n", getpid(), dev->keyword_bytes - keyword_bytes_left, get_time_ms());
 		memcpy(audio_out_buffer, &keyword_buffer[dev->keyword_bytes - keyword_bytes_left], dev->sample_size);
 		keyword_bytes_left -= dev->sample_size;
 		return SYNTIANT_NDP_ERROR_NONE;
@@ -1095,7 +1096,7 @@ int ndp120_extract_audio(struct ndp120_dev_s *dev, uint8_t *audio_out_buffer,
 				SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
 				SYNTIANT_NDP_EXTRACT_FROM_UNREAD, audio_out_buffer, &sample_size);
 		} while (s == SYNTIANT_NDP_ERROR_DATA_REREAD);
-		//auddbg("[%d] extracted %d bytes @ %lu ms\n", getpid(), sample_size, get_time_ms());
+		//auddbg("[%d] extract done %d bytes @ %lu ms\n", getpid(), sample_size, get_time_ms());
 	}
 
 	return SYNTIANT_NDP_ERROR_NONE;
@@ -1145,20 +1146,42 @@ int ndp120_start_sample_ready(struct ndp120_dev_s *dev)
 
 	dev->recording = true;
 
-	s =  ndp120_set_sample_ready_int(dev, 1);
-
 	if (include_keyword) {
+		int extracted = 0;
+		/* TODO: work through the extraction scheme when using combined models. The following may not be the best approach */
+		/* set pointer & do extraction */
 		unsigned int extract_bytes = dev->keyword_bytes;
 		s = syntiant_ndp_extract_data(dev->ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
-								SYNTIANT_NDP_EXTRACT_FROM_MATCH, (uint8_t *)keyword_buffer,
+								SYNTIANT_NDP_EXTRACT_FROM_MATCH, NULL,
 								&extract_bytes);
-		if (check_status("extract match", s)) {
-			return s;
+		auddbg("[%d] (After setting from_match pointer) extract_bytes=%d bytes @ %lu ms\n", getpid(), extract_bytes, get_time_ms());
+
+		s = syntiant_ndp_extract_data(dev->ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
+						SYNTIANT_NDP_EXTRACT_FROM_UNREAD, keyword_buffer,
+						&extract_bytes);
+		auddbg("[%d] (after extract of keyword) extract_bytes=%d bytes @ %lu ms\n", getpid(), extract_bytes, get_time_ms());
+		extracted += extract_bytes;
+		auddbg("[%d] extracted = %d\n", getpid(), extracted);
+
+		while (extracted < dev->keyword_bytes) { 
+			if (extracted + extract_bytes > dev->keyword_bytes) {
+				extract_bytes = dev->keyword_bytes - extracted;
+			}
+			do {
+				s = syntiant_ndp_extract_data(dev->ndp, SYNTIANT_NDP_EXTRACT_TYPE_INPUT,
+					SYNTIANT_NDP_EXTRACT_FROM_UNREAD, &keyword_buffer[extracted],
+					&extract_bytes);
+			} while (s == SYNTIANT_NDP_ERROR_DATA_REREAD);
+			auddbg("[%d] (after extract of keyword) extract_bytes=%d bytes @ %lu ms\n", getpid(), extract_bytes, get_time_ms());
+			extracted += extract_bytes;
+			auddbg("[%d] extracted = %d\n", getpid(), extracted);
 		}
-		
+
 		keyword_bytes_left = dev->keyword_bytes;
 
 		include_keyword = false;
+
+		s =  ndp120_set_sample_ready_int(dev, 1);
 	}
 
 	return s;
