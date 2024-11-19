@@ -306,6 +306,10 @@ static int i2s_err_cb_register(struct i2s_dev_s *dev, i2s_err_cb_t cb, void *arg
  * External functions
  ****************************************************************************/
 
+#ifdef CONFIG_NDP120_AEC_SUPPORT
+extern ndp120_audio_buffer_reset(void);
+#endif
+
 static const i2s_config_t i2s_default_config = {
 
 	.sample_rate = SP_48K,
@@ -449,6 +453,10 @@ static int i2s_tx_start(struct amebasmart_i2s_s *priv)
 		i2sinfo("[TX] empty!\n");
 		return OK;
 	}
+
+#ifdef CONFIG_NDP120_AEC_SUPPORT
+	ndp120_audio_buffer_reset();
+#endif
 
 	flags = enter_critical_section();
 
