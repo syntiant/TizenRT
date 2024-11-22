@@ -1009,7 +1009,14 @@ void ndp120_show_debug(int include_spi, int do_check_mb)
         ndp_mcu_read(NDP120_DSP_CONFIG_PDMCFG_B(i), &val[i]);
     }
     for (i=0; i<NDP120_DSP_CONFIG_PDMCFG_B_COUNT; i++) {
-        printf("PDMCFG_B[%d]: 0x%X\n", val[i]);
+        printf("PDMCFG_B[%d]: 0x%X\n", i, val[i]);
+    }
+
+    for (i=0; i<NDP120_CHIP_CONFIG_AUDCTRL_COUNT; i++) {
+        ndp_mcu_read(NDP120_CHIP_CONFIG_AUDCTRL(i), &val[i]);
+    }
+    for (i=0; i<NDP120_CHIP_CONFIG_AUDCTRL_COUNT; i++) {
+        printf("AUDCTRL[%d]: 0x%X\n", i, val[i]);
     }
  
     if (do_check_mb) {
@@ -1017,7 +1024,7 @@ void ndp120_show_debug(int include_spi, int do_check_mb)
     }
 }
 
-#ifdef CONFIG_NDP120_ALIVE_CHECKgit checkout -b pdm_debug
+#ifdef CONFIG_NDP120_ALIVE_CHECK
 static int
 check_firmware_aliveness(struct ndp120_dev_s *dev, uint32_t wait_period_ms)
 {
