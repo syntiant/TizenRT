@@ -672,6 +672,12 @@ static int configure_audio(struct ndp120_dev_s *dev, unsigned int pdm_in_shift)
 
      */
 
+    uint32_t gpiodrive;
+    syntiant_ndp120_read(dev->ndp, 1, NDP120_CHIP_CONFIG_GPIODRIVELO, &gpiodrive);
+    gpiodrive = NDP120_CHIP_CONFIG_GPIODRIVELO_DRIVE_MASK_INSERT(gpiodrive, 8, NDP120_CHIP_CONFIG_GPIODRIVELO_DRIVE_DRIVE8MA);
+    syntiant_ndp120_write(dev->ndp, 1, NDP120_CHIP_CONFIG_GPIODRIVELO, gpiodrive);
+    auddbg("Configured GPIODRIVE to 0x%x\n", gpiodrive);
+
 	/* enable the PDM clock (for the default, pdm0 aka 'left' mic) */
 	memset(&pdm_config, 0, sizeof(pdm_config));
 	pdm_config.interface = 0;
