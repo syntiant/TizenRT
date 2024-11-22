@@ -878,8 +878,22 @@ struct ndp120_dev_s * ndp120_get_debug_handle(void)
 	return _ndp_debug_handle;
 }
 
+void check_mb(struct ndp120_dev_s *dev)
+{
+	uint32_t resp = 0;
+
+	int s;
+	s = syntiant_ndp120_do_mailbox_req(dev->ndp, NDP120_DSP_MB_H2D_REQUEST_NOP, &resp);
+	auddbg("NDP120_DSP_MB_H2D_REQUEST_NOP => %d / 0x%x\n", s, resp);
+
+	resp = 0;
+	s = syntiant_ndp120_do_mailbox_req(dev->ndp, NDP_MBIN_REQUEST_NOP, &resp);
+	auddbg("NDP_MBIN_REQUEST_NOP => %d / 0x%x\n", s, resp);
+
+}
+
 /* debug function, useful for doing debugging via shell */
-void ndp120_show_debug(int include_spi)
+void ndp120_show_debug(int include_spi, int do_check_mb)
 {
 	uint8_t tmp;
 	int i, s;
@@ -908,6 +922,15 @@ void ndp120_show_debug(int include_spi)
 	printf("frame_cnt: %d\n", dsp_cnts.frame_cnt);
 	printf("dnn_int_cnt: %d\n", dsp_cnts.dnn_int_cnt);
 	printf("dnn_err_cnt: %d\n", dsp_cnts.dnn_err_cnt);
+    printf("h2d_mb_cnt: %d\n", dsp_cnts.h2d_mb_cnt);
+    printf("d2m_mb_cnt: %d\n", dsp_cnts.d2m_mb_cnt);
+    printf("m2d_mb_cnt: %d\n", dsp_cnts.m2d_mb_cnt);
+    printf("watermark_cnt: %d\n", dsp_cnts.watermark_cnt);
+    printf("fifo_overflow_cnt: %d\n", dsp_cnts.fifo_overflow_cnt);
+    printf("mem_alloc_err_cnt: %d\n", dsp_cnts.mem_alloc_err_cnt);
+    printf("func_debug_cnt: %d\n", dsp_cnts.func_debug_cnt);
+    printf("pcm_debug_cnt: %d\n", dsp_cnts.pcm_debug_cnt);
+    printf("dnn_run_err_cnt: %d\n", dsp_cnts.dnn_run_err_cnt);
 
 	syntiant_ndp120_config_tank_t tank_config;
 	memset(&tank_config, 0, sizeof(tank_config));
@@ -932,9 +955,69 @@ void ndp120_show_debug(int include_spi)
 	for (i = 0; i < NDP120_DSP_CONFIG_BUFFILLLEVEL_COUNT; i++) {
 		printf("BUFFILLLEVEL[%d]: 0x%X\n", i, buffill[i]);
 	}
+    
+    uint32_t bufctrl[NDP120_DSP_CONFIG_BUFCTRL_COUNT];
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFCTRL_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_BUFCTRL(i), &bufctrl[i]);
+    }
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFCTRL_COUNT; i++) {
+        printf("BUFCTRL[%d]: 0x%X\n", i, bufctrl[i]);
+    }
+
+    uint32_t startaddr[NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT];
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_BUFSTARTADDR(i), &startaddr[i]);
+    }
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT; i++) {
+        printf("BUFSTARTADDR[%d]: 0x%X\n", i, startaddr[i]);
+    }
+
+    uint32_t endaddr[NDP120_DSP_CONFIG_BUFENDADDR_COUNT];
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFENDADDR_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_BUFENDADDR(i), &endaddr[i]);
+    }
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFENDADDR_COUNT; i++) {
+        printf("BUFENDADDR[%d]: 0x%X\n", i, endaddr[i]);
+    }
+
+    uint32_t val[10];
+    for (i=0; i<NDP120_DSP_CONFIG_FIFOSAMPLETHRESHOLD_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_FIFOSAMPLETHRESHOLD(i), &val[i]);
+    }
+    for (i=0; i<NDP120_DSP_CONFIG_FIFOSAMPLETHRESHOLD_COUNT; i++) {
+        printf("FIFOSAMPLETHRESHOLD[%d]: 0x%X\n", i, val[i]);
+    }
+
+    for (i=0; i<NDP120_DSP_CONFIG_BUFCURWRPTR_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_BUFCURWRPTR(i), &val[i]);
+    }
+    for (i=0; i<NDP120_DSP_CONFIG_BUFCURWRPTR_COUNT; i++) {
+        printf("BUFCURWRPTR[%d]: 0x%X\n", i, val[i]);
+    }
+
+    for (i=0; i<NDP120_DSP_CONFIG_BUFBLOCKWRPTR_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_BUFBLOCKWRPTR(i), &val[i]);
+    }
+    for (i=0; i<NDP120_DSP_CONFIG_BUFBLOCKWRPTR_COUNT; i++) {
+        printf("BUFBLOCKWRPTR[%d]: 0x%X\n", i, val[i]);
+    }
+
+    ndp_mcu_read(NDP120_DSP_CONFIG_BUFIRQSTAT, &val[0]);
+    printf("BUFIRQSTAT: 0x%X\n", val[0]);
+
+    for (i=0; i<NDP120_DSP_CONFIG_PDMCFG_B_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_PDMCFG_B(i), &val[i]);
+    }
+    for (i=0; i<NDP120_DSP_CONFIG_PDMCFG_B_COUNT; i++) {
+        printf("PDMCFG_B[%d]: 0x%X\n", val[i]);
+    }
+ 
+    if (do_check_mb) {
+        check_mb(_ndp_debug_handle);
+    }
 }
 
-#ifdef CONFIG_NDP120_ALIVE_CHECK
+#ifdef CONFIG_NDP120_ALIVE_CHECKgit checkout -b pdm_debug
 static int
 check_firmware_aliveness(struct ndp120_dev_s *dev, uint32_t wait_period_ms)
 {
