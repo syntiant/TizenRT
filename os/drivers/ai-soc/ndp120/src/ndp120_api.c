@@ -1605,5 +1605,104 @@ void ndp120_aec_disable(struct ndp120_dev_s *dev)
 	ndp120_test_internal_passthrough_switch(dev, 1);
 	dev->extclk_inuse = false;
 }
+
+void ndp120_test_recover(int method)
+{
+    struct syntiant_ndp_device_s *ndp = _ndp_debug_handle->ndp;
+    uint32_t pdmctl;
+    uint32_t bufstartaddr[NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT];
+    uint32_t fifoctrl;
+    int i;
+        
+    if (method == 0) {
+        /* method 0 is almost same as method 1, only a few extra steps added */
+        auddbg("Trying recovery via mechanism #0\n");
+        ndp_mcu_write(NDP120_DSP_CONFIG_BUFCLRIRQSTAT, 0x1f);
+        ndp_mcu_write(NDP120_DSP_CONFIG_BUFCLRIRQSTAT, 0);
+    }
+    if (method == 1) {
+        auddbg("Trying recovery via mechanism #1\n");
+    }
+
+    ndp_mcu_read(NDP120_DSP_CONFIG_PDMCTL(0), &pdmctl);
+
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT; i++) {
+        ndp_mcu_read(NDP120_DSP_CONFIG_BUFSTARTADDR(i), &bufstartaddr[i]);
+    }
+
+    // write pdmctl[0]=enable=0
+    pdmctl = NDP120_DSP_CONFIG_PDMCTL_ENABLE_MASK_INSERT(pdmctl, 0);
+    ndp_mcu_write(NDP120_DSP_CONFIG_PDMCTL(0), pdmctl);
+
+    // write pdmctl[0]=rstb=0
+    pdmctl = NDP120_DSP_CONFIG_PDMCTL_RSTB_MASK_INSERT(pdmctl, 0);
+    ndp_mcu_write(NDP120_DSP_CONFIG_PDMCTL(0), pdmctl);
+
+    // write bufstartaddr[0..4]=0
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT; i++) {
+        ndp_mcu_write(NDP120_DSP_CONFIG_BUFSTARTADDR(i), 0);
+    }
+
+    // write bufstartaddr[0..4]=<orig value>
+    for (i = 0; i < NDP120_DSP_CONFIG_BUFSTARTADDR_COUNT; i++) {
+        ndp_mcu_write(NDP120_DSP_CONFIG_BUFSTARTADDR(i), bufstartaddr[i]);
+    }
+
+    // write fifoctrl=reset_fifo_ptr=0x1f
+    ndp_mcu_read(NDP120_DSP_CONFIG_FIFOCTRL, &fifoctrl);
+    fifoctrl = NDP120_DSP_CONFIG_FIFOCTRL_RESET_FIFO_PTR_MASK_INSERT(fifoctrl, 0x1f);
+    ndp_mcu_write(NDP120_DSP_CONFIG_FIFOCTRL, fifoctrl);
+
+    // write fifoctrl=reset_fifo_ptr=0
+    fifoctrl = NDP120_DSP_CONFIG_FIFOCTRL_RESET_FIFO_PTR_MASK_INSERT(fifoctrl, 0);
+    ndp_mcu_write(NDP120_DSP_CONFIG_FIFOCTRL, fifoctrl);
+
+    // write fifoctrl=audio_fifo_rstb=0
+    fifoctrl = NDP120_DSP_CONFIG_FIFOCTRL_AUDIO_FIFO_RSTB_MASK_INSERT(fifoctrl, 0);
+    ndp_mcu_write(NDP120_DSP_CONFIG_FIFOCTRL, fifoctrl);
+
+    // write fifoctrl=audio_fifo_rstb=1
+    fifoctrl = NDP120_DSP_CONFIG_FIFOCTRL_AUDIO_FIFO_RSTB_MASK_INSERT(fifoctrl, 1);
+    ndp_mcu_write(NDP120_DSP_CONFIG_FIFOCTRL, fifoctrl);
+
+    // write pdmctl[0]=rstb=1
+    pdmctl = NDP120_DSP_CONFIG_PDMCTL_RSTB_MASK_INSERT(pdmctl, 1);
+    ndp_mcu_write(NDP120_DSP_CONFIG_PDMCTL(0), pdmctl);
+
+    // write pdmctl[0]=enable=1
+    pdmctl = NDP120_DSP_CONFIG_PDMCTL_ENABLE_MASK_INSERT(pdmctl, 1);
+    ndp_mcu_write(NDP120_DSP_CONFIG_PDMCTL(0), pdmctl);
+}
+
+void ndp120_utils_read_write(int type, uint32_t reg, uint32_t val, uint32_t *retval)
+{
+	struct ndp120_dev_s *dev = ndp120_get_debug_handle();
+	struct syntiant_ndp_device_s *ndp;
+	if (!dev) {
+		printf("Error debug handle\n");
+	}
+
+	ndp = dev->ndp;
+	if (!ndp) {
+		printf("Error NDP handle\n");
+	}
+
+	if (type == 0) {
+		uint8_t d;
+		/* SPI read */
+		tizenrt_io_spi_transfer(dev, 0, reg, NULL, &d, 1);
+		*retval = d;
+	} else if (type == 1) {
+		/* SPI write */
+		tizenrt_io_spi_transfer(dev, 0, reg, &val, NULL, 1);
+	} else if (type == 2) {
+		/* MCU read */
+		tizenrt_io_spi_transfer(dev, 1, reg, NULL, retval, 4);
+	} else if (type == 3) {
+		/* MCU write */
+		tizenrt_io_spi_transfer(dev, 1, reg, &val, NULL, 4);
+	}
+}
+
 #endif
 

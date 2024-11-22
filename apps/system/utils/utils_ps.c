@@ -193,8 +193,33 @@ int utils_ps(int argc, char **args)
 	if (argc > 1) {
 		int check_mb = 0;
 		extern void ndp120_show_debug(int include_spi, int check_mb);
+		void ndp120_utils_read_write(int type, uint32_t reg, uint32_t val, uint32_t *retval);
+
+		if ((argc > 2) && !strcmp(args[1], "test")) {
+			extern void ndp120_test_recover(int method);
+			ndp120_test_recover(atoi(args[2]));
+			return 0;
+		}
+
+		if ((argc > 2) && !strcmp(args[1], "read")) {
+			uint32_t r = strtoul(args[2], NULL, 0);
+			uint32_t v;
+			ndp120_utils_read_write(2 /*mcu read*/, r, 0, &v);
+			printf("0x%x=0x%x\n", r, v);
+			return 0;
+		}
+
+		if ((argc > 3) && !strcmp(args[1], "write")) {
+			uint32_t r = strtoul(args[2], NULL, 0);
+			uint32_t v = strtoul(args[3], NULL, 0);
+			ndp120_utils_read_write(3 /*mcu write*/, r, v, NULL);
+			printf("wrote 0x%x=0x%x\n", r, v);
+			return 0;
+		}
+
 		check_mb = atoi(args[1]);
 		ndp120_show_debug(1, check_mb);
+		return 0;
 	}
 
 #ifdef CONFIG_SMP
