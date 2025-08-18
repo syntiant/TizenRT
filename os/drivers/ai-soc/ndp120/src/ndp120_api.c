@@ -692,6 +692,28 @@ static int configure_audio(struct ndp120_dev_s *dev, unsigned int pdm_in_shift)
 	config_gain.mic = 1;
 	s = syntiant_ndp120_config_gain(dev->ndp, &config_gain);
 	check_status("syntiant_ndp120_config_gain", s);
+	
+	/* filter settings for 10Hz roll-off */
+	syntiant_ndp120_config_bwcoef_t coef_config;
+	memset(&coef_config, 0, sizeof(coef_config));
+	coef_config.set = SYNTIANT_NDP120_CONFIG_SET_BWCOEF_A1 |
+    					SYNTIANT_NDP120_CONFIG_SET_BWCOEF_A2 |
+    			 		SYNTIANT_NDP120_CONFIG_SET_BWCOEF_B0 |
+						SYNTIANT_NDP120_CONFIG_SET_BWCOEF_B1 |
+						SYNTIANT_NDP120_CONFIG_SET_BWCOEF_B2;
+	coef_config.a1 = 0x008016c0;
+	coef_config.a2 = 0x003fe944;
+	coef_config.b0 = 0x003ff4a1;
+	coef_config.b1 = 0x008016be;
+	coef_config.b2 = 0x003ff4a1;
+
+	coef_config.mic = 0;
+	s = syntiant_ndp120_config_bwcoef(dev->ndp, &coef_config);
+	check_status("syntiant_ndp120_config_bwcoef mic 0", s);
+	
+	coef_config.mic = 1;
+	s = syntiant_ndp120_config_bwcoef(dev->ndp, &coef_config);
+	check_status("syntiant_ndp120_config_bwcoef mic1", s);
 
  	/* Note: this test code always sets up for internal clock and then adds intermediate test apis to either;
 		1) switch to external clock - for use when buffer is in use (also allows for switching back again)
@@ -1195,6 +1217,21 @@ void ndp120_show_debug(int include_spi, int do_check_mb)
 		printf("I2SCTL[%d]: 0x%X\n", i, val);
 	}
 
+	for (i = 0; i < 4; i++) {
+		ndp_mcu_read(NDP120_DSP_CONFIG_BWCOEF_A0_CFG(i), &val);
+		printf("BWCOEF_A0[%d]: 0x%X\n", i, val);
+		ndp_mcu_read(NDP120_DSP_CONFIG_BWCOEF_A1_CFG(i), &val);
+		printf("BWCOEF_A1[%d]: 0x%X\n", i, val);
+		ndp_mcu_read(NDP120_DSP_CONFIG_BWCOEF_A2_CFG(i), &val);
+		printf("BWCOEF_A2[%d]: 0x%X\n", i, val);
+		ndp_mcu_read(NDP120_DSP_CONFIG_BWCOEF_B0_CFG(i), &val);
+		printf("BWCOEF_B0[%d]: 0x%X\n", i, val);
+		ndp_mcu_read(NDP120_DSP_CONFIG_BWCOEF_B1_CFG(i), &val);
+		printf("BWCOEF_B1[%d]: 0x%X\n", i, val);
+		ndp_mcu_read(NDP120_DSP_CONFIG_BWCOEF_B2_CFG(i), &val);
+		printf("BWCOEF_B2[%d]: 0x%X\n", i, val);
+	}
+
 	if (do_check_mb) {
 		check_mb(_ndp_debug_handle);
 	}
@@ -1290,13 +1327,13 @@ int ndp120_init(struct ndp120_dev_s *dev, bool reinit)
 	/* File names */
 	int s;
 
-	const char *mcu_package = "/mnt/kernel/audio/mcu_fw";
-	const char *dsp_package = "/mnt/kernel/audio/dsp_fw";
+	const char *mcu_package = "/res/kernel/audio/mcu_fw";
+	const char *dsp_package = "/res/kernel/audio/dsp_fw";
 	const char *neural_package;
 	if (dev->kd_num == 0) {
-		neural_package = "/mnt/kernel/audio/kd_local";
+		neural_package = "/res/kernel/audio/kd_local";
 	} else {
-		neural_package = "/mnt/kernel/audio/kd_local2";
+		neural_package = "/res/kernel/audio/kd_local2";
 	}
 
 
