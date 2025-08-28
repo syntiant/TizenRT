@@ -325,10 +325,10 @@ static wifi_manager_ap_config_s ap_config;
 
 int wifi_start(char* ssid, char *psk)
 {
-    int repeat = 0;
-    wifi_manager_result_e wres = WIFI_MANAGER_SUCCESS;
-    while(repeat++ < 3){
-    	wres = wifi_manager_init(&g_wifi_callbacks);
+	int repeat = 0;
+	wifi_manager_result_e wres = WIFI_MANAGER_SUCCESS;
+	while(repeat++ < 3){
+		wres = wifi_manager_init(&g_wifi_callbacks);
 		if (wres != WIFI_MANAGER_SUCCESS) {
 			printf("fail to initialize wifi manager, ret: %d\n", wres);
 			printf("Will try again in a sec..\n");
@@ -353,8 +353,8 @@ int wifi_start(char* ssid, char *psk)
 			printf("Connected to %s, ip addr can be checked using ifconfig\n", ssid);
 			break;
 		}
-    }
-    return wres;
+	}
+	return wres;
 }
 
 static char *server = NULL;
@@ -383,12 +383,12 @@ void ndp120_stream_wifi_setup(void)
 		inifile_free_string(passwd);
 
 		for (i = 0; i < WIFI_CONNECT_ATTEMPTS; i++) {
-            wifi_manager_get_info(&wifi_info);
-            if (wifi_info.status == AP_CONNECTED) {
-                printf("AP connected!\n");
-                break;
-            }
-            usleep(250000);
+			wifi_manager_get_info(&wifi_info);
+			if (wifi_info.status == AP_CONNECTED) {
+				printf("AP connected!\n");
+				break;
+			}
+			usleep(250000);
 		}
 	}
 }
@@ -409,11 +409,11 @@ static int tid_idx_to_send = 0;
 
 int get_ms_time(uint32_t *ms_time)
 {
-    struct timeval  tv;
-    gettimeofday(&tv, NULL);
+	struct timeval	tv;
+	gettimeofday(&tv, NULL);
 
-    *ms_time = (uint32_t) (tv.tv_sec * 1000 + tv.tv_usec / 1000);
-    return 0;
+	*ms_time = (uint32_t) (tv.tv_sec * 1000 + tv.tv_usec / 1000);
+	return 0;
 }
 
 static void stream_file(int socket_s, uint8_t * data, uint32_t len, int my_tid_idx, int verbose)
@@ -476,12 +476,12 @@ static void *stream_file_task(void *arg)
 
 void ndp120_stream_multi_channels(char* server_ip, unsigned int destport, int duration, int verbose)
 {
-    time_t start_time, current_time;
-    struct rtc_time start_time_rtc = RTC_TIME_INITIALIZER(1970, 1, 1, 0, 0, 0);
+	time_t start_time, current_time;
+	struct rtc_time start_time_rtc = RTC_TIME_INITIALIZER(1970, 1, 1, 0, 0, 0);
 	struct rtc_time current_time_rtc = RTC_TIME_INITIALIZER(1970, 1, 1, 0, 0, 0);
 	unsigned int elapsed_time_rtc = 0;
 	
-    uint32_t total_bytes = 0;
+	uint32_t total_bytes = 0;
 	int socket_send;
 	int n_extractions = 0;
 	int first = 1;
@@ -528,7 +528,7 @@ void ndp120_stream_multi_channels(char* server_ip, unsigned int destport, int du
 	stream_file_args.socket_s = socket_send;
 	stream_file_args.verbose = verbose;
 
-    printf("Streaming for %ds...\n", duration);
+	printf("Streaming for %ds...\n", duration);
 
 	uint32_t returned_extract_size;
 	sd->startMultiChStream(duration, verbose, &returned_extract_size);
@@ -547,7 +547,7 @@ void ndp120_stream_multi_channels(char* server_ip, unsigned int destport, int du
 		printf("Data allocated at %p (len %d)\n",recorded_data[i], alloc_len);
 	}
 
-    while ((duration == -1) || elapsed_time_rtc < duration) {
+	while ((duration == -1) || elapsed_time_rtc < duration) {
 		sd->readMultiChStream(data, &audio_data_len);
 		if (first) {
 			if (ioctl(rtc_fd, RTC_RD_TIME, (unsigned long)&start_time_rtc) < 0) {
@@ -565,7 +565,7 @@ void ndp120_stream_multi_channels(char* server_ip, unsigned int destport, int du
 			if ((verbose && audio_data_len > 1932) || (verbose > 2))  {
 				uint32_t tnow;
 				get_ms_time(&tnow);
-				printf("%d - elapsed %d Extracted: %d @ %u   written %d   total %u \n",
+				printf("%d - elapsed %d Extracted: %d @ %u	 written %d   total %u \n",
 					   n_extractions, elapsed_time_rtc, audio_data_len, tnow, written, total_bytes);
 			}
 
@@ -597,12 +597,12 @@ void ndp120_stream_multi_channels(char* server_ip, unsigned int destport, int du
 	/* sending inline with -1 to allow sending last chunk regardless of check */
 	stream_file(stream_file_args.socket_s, recorded_data[tid_idx], written, -1, verbose);
 
-    printf("\nTotal written: %d\n", total_bytes);
+	printf("\nTotal written: %d\n", total_bytes);
 
 	close(socket_send);
 
-    printf("Turning off streaming  ...\n");
-    sd->stopMultiChStream();
+	printf("Turning off streaming  ...\n");
+	sd->stopMultiChStream();
 
 	for (i = 0; i < NUM_STREAM_CHUNKS; i++) {
 		if (recorded_data[i]) free(recorded_data[i]);
@@ -611,7 +611,7 @@ void ndp120_stream_multi_channels(char* server_ip, unsigned int destport, int du
 
 	close(rtc_fd);
 
-    printf("\nSuccessfully Done.\n\nPLEASE REBOOT PRIOR TO DOING ANOTHER RECORDING\n");
+	printf("\nSuccessfully Done.\n\nPLEASE REBOOT PRIOR TO DOING ANOTHER RECORDING\n");
 }
 
 
