@@ -767,6 +767,19 @@ static int configure_audio(struct ndp120_dev_s *dev, unsigned int pdm_in_shift)
 		goto errout_configure_audio;
 	}
 
+	uint32_t pdmcfg_a;
+	int intf = 0;
+	syntiant_ndp120_read(dev->ndp, 1, NDP120_DSP_CONFIG_PDMCFG_A(intf), &pdmcfg_a);
+	pdmcfg_a = NDP120_DSP_CONFIG_PDMCFG_A_DECIMATION_MASK_INSERT(pdmcfg_a, 0x80);
+	syntiant_ndp120_write(dev->ndp, 1, NDP120_DSP_CONFIG_PDMCFG_A(intf), pdmcfg_a);
+
+	syntiant_ndp120_config_farrow_t farrow_config;
+	memset(&farrow_config, 0, sizeof(farrow_config));
+	farrow_config.set = SYNTIANT_NDP120_CONFIG_SET_FARROW_PHASE_STEP;
+	farrow_config.phase_step = 0x6000000;
+	farrow_config.interface = 0;
+	s = syntiant_ndp120_config_farrow(dev->ndp, &farrow_config);
+	check_status("syntiant_ndp120_config_farrow", s);
 
 	/*
 	 * get the current audio frame size which is governed by the audio
