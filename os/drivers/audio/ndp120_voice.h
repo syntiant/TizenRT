@@ -71,6 +71,7 @@ struct ndp120_dev_s {
 	bool kd_enabled;
 #endif
 	struct ndp120_lower_s *lower;
+	bool fw_loaded;
 	bool recording; /* during recording we ignore main keyword detections */
 	bool ndp_interrupts_enabled; /* used by mbwait to determine whether wait for sem or poll */
 	char *labels_per_network[MAX_NNETWORKS][MAX_LABELS];

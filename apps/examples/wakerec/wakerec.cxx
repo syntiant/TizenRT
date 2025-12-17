@@ -229,6 +229,12 @@ private:
 		printf("####   Playback done!!        ####\n");
 		printf("##################################\n");
 		if (mKDEnabled) {
+			fp = fopen(filePath, "wb");
+			if (fp == NULL) {
+				printf("FILE OPEN FAILED\n");
+				return;
+			}
+
 			printf("###################################\n");
 			printf("#### Wait for wakeup triggered ####\n");
 			printf("###################################\n");
@@ -346,6 +352,21 @@ int wakerec_main(int argc, char *argv[])
 		printf("mode is optional 0 Disable wakeup\n");
 		return -1;
 	}
+
+	/* production SW simulation in order to force NDP init post system startup */
+	#define AUDIOIOC_CHANGEKD           _AUDIOIOC(28)
+
+	int fd = open("/dev/audio/pcmC0D0c", O_RDONLY);
+	if (fd < 0) {
+		return -1;
+	}
+	if (ioctl(fd, AUDIOIOC_CHANGEKD, (0)) < 0) {
+		meddbg("change kd model failed. errno : %d\n", errno);
+		close(fd);
+		return -1;
+	}
+	close(fd);
+
 	auto recorder = std::shared_ptr<WakeRec>(new WakeRec());
 	if (argc == 2 && atoi(argv[1]) == 0) {
 		printf("disable KD!!\n");

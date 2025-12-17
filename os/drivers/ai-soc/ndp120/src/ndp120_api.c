@@ -1260,15 +1260,15 @@ ndp120_app_device_health_check(void)
 
 	uint32_t wait_period_ms;
 
-	wait_period_ms = dev->sample_size * 1000 /
-		(SYNTIANT_NDP120_AUDIO_SAMPLE_RATE *
-		SYNTIANT_NDP120_AUDIO_SAMPLES_PER_WORD);
-
 	while (1) {
 		ndp120_semtake(dev);
+		/* if thread was started prior to the FW being loaded, we can't rely on the initial value of dev->sample_size */
+		wait_period_ms = dev->sample_size * 1000 /
+			(SYNTIANT_NDP120_AUDIO_SAMPLE_RATE *
+			SYNTIANT_NDP120_AUDIO_SAMPLES_PER_WORD);
 		(void)pm_suspend(dev->pm_domain);
-		/* If KD Change requested, then skip checking */
-		if (!dev->kd_changed) {
+		/* If KD Change requested, then skip checking. Also skip checking if no FW is loaded */
+		if (!dev->kd_changed && dev->fw_loaded) {
 			s = check_firmware_aliveness(dev, wait_period_ms);
 			if (s) {
 				/* In the case of failure, try again after sometime */
@@ -1311,6 +1311,9 @@ int ndp120_init(struct ndp120_dev_s *dev, bool reinit)
 	_ndp_debug_handle = dev;
 
 	if (!reinit) {
+		dev->alive = false;
+		dev->ndp = NULL;
+		dev->fw_loaded = false;
 		s = pthread_mutex_init(&dev->ndp_mutex_mbsync, NULL);
 		if (s) {
 			auddbg("failed to initialize mb sync mutex variable\n");
@@ -1338,111 +1341,114 @@ int ndp120_init(struct ndp120_dev_s *dev, bool reinit)
 		sem_init(&dev->reset_sem, 0, 1);
 	}
 
-	/* initialize NDP */
-	s = initialize_ndp(dev);
-	if (s) {
-		auddbg("initialize_ndp failed\n");
-		goto errout_ndp120_init;
-	}
+	if (reinit) {
+		/* initialize NDP */
+		s = initialize_ndp(dev);
+		if (s) {
+			auddbg("initialize_ndp failed\n");
+			goto errout_ndp120_init;
+		}
 
-	/*
-	 * load M0, Xtensa and Syntiant Core 2 firmware neural network
-	 * perform audio & neural agorithm and associated NDP configuration
-	 */
-	s = load_synpkg(dev->ndp, mcu_package);
-	if (s) {
-		auddbg("mcu package load failed\n");
-		goto errout_ndp120_init;
-	}
+		/*
+		 * load M0, Xtensa and Syntiant Core 2 firmware neural network
+		 * perform audio & neural agorithm and associated NDP configuration
+		 */
+		s = load_synpkg(dev->ndp, mcu_package);
+		if (s) {
+			auddbg("mcu package load failed\n");
+			goto errout_ndp120_init;
+		}
 
-	s = load_synpkg(dev->ndp, dsp_package);
-	if (s) {
-		auddbg("dsp package load failed\n");
-		goto errout_ndp120_init;
-	}
+		s = load_synpkg(dev->ndp, dsp_package);
+		if (s) {
+			auddbg("dsp package load failed\n");
+			goto errout_ndp120_init;
+		}
 
-	s = load_synpkg(dev->ndp, neural_package);
-	if (s) {
-		auddbg("neural package load failed\n");
-		goto errout_ndp120_init;
-	}
+		s = load_synpkg(dev->ndp, neural_package);
+		if (s) {
+			auddbg("neural package load failed\n");
+			goto errout_ndp120_init;
+		}
 
-	attach_algo_config_area(dev->ndp, FF_ID, 0);
+		attach_algo_config_area(dev->ndp, FF_ID, 0);
 #if BT_MIC_SUPPORT == 1
-	// when using BT-mic, attach algo config to func0 as well
-	attach_algo_config_area(dev->ndp, 0, 0);
+		// when using BT-mic, attach algo config to func0 as well
+		attach_algo_config_area(dev->ndp, 0, 0);
 #endif
 
 #ifdef CONFIG_NDP120_AEC_SUPPORT
-	do_audio_sync(dev->ndp, NDP120_DSP_AUDIO_CHAN_AUD1, NDP120_DSP_AUDIO_CHAN_AUD0, 0);
+		do_audio_sync(dev->ndp, NDP120_DSP_AUDIO_CHAN_AUD1, NDP120_DSP_AUDIO_CHAN_AUD0, 0);
 #endif
 
 #if BT_MIC_SUPPORT == 1
-	// add special rules for BT-mic
-	add_dsp_flow_rules_btmic(dev->ndp);
+		// add special rules for BT-mic
+		add_dsp_flow_rules_btmic(dev->ndp);
 #else
-	add_dsp_flow_rules(dev->ndp);
+		add_dsp_flow_rules(dev->ndp);
 #endif
 
-	struct syntiant_ndp120_config_tank_s tank_config;
-	memset(&tank_config, 0, sizeof(tank_config));
-	tank_config.set = SYNTIANT_NDP120_CONFIG_SET_TANK_SAMPLETANK_MSEC;
-	tank_config.sampletank_msec = AUDIO_TANK_MS;
-	s = syntiant_ndp120_config_dsp_tank_memory(dev->ndp, &tank_config);
+		struct syntiant_ndp120_config_tank_s tank_config;
+		memset(&tank_config, 0, sizeof(tank_config));
+		tank_config.set = SYNTIANT_NDP120_CONFIG_SET_TANK_SAMPLETANK_MSEC;
+		tank_config.sampletank_msec = AUDIO_TANK_MS;
+		s = syntiant_ndp120_config_dsp_tank_memory(dev->ndp, &tank_config);
 
-	int flowset_id = COMBINED_FLOW_SET_ID;
-	s = syntiant_ndp120_dsp_flow_get_put_set_id(dev->ndp, &flowset_id);
-	if (s) {
-		auddbg("Error enabling flow id %d: %d\n", flowset_id, s);
-		goto errout_ndp120_init;
-	}
+		int flowset_id = COMBINED_FLOW_SET_ID;
+		s = syntiant_ndp120_dsp_flow_get_put_set_id(dev->ndp, &flowset_id);
+		if (s) {
+			auddbg("Error enabling flow id %d: %d\n", flowset_id, s);
+			goto errout_ndp120_init;
+		}
 
-	s = configure_audio(dev, DMIC_1536KHZ_PDM_IN_SHIFT_FF);
-	if (s) {
-		auddbg("audio configure failed\n");
-		goto errout_ndp120_init;
-	}
+		s = configure_audio(dev, DMIC_1536KHZ_PDM_IN_SHIFT_FF);
+		if (s) {
+			auddbg("audio configure failed\n");
+			goto errout_ndp120_init;
+		}
 
-	dev->keyword_bytes = round_down(KEYWORD_BUFFER_LEN, dev->sample_size);
+		dev->keyword_bytes = round_down(KEYWORD_BUFFER_LEN, dev->sample_size);
 
-	if (dev->keyword_buffer == NULL) {
-		dev->keyword_buffer = (uint8_t *)kmm_malloc(dev->keyword_bytes);
-	}
+		if (dev->keyword_buffer == NULL) {
+			dev->keyword_buffer = (uint8_t *)kmm_malloc(dev->keyword_bytes);
+		}
 
-	if (dev->keyword_buffer == NULL) {
-		auddbg("keyword buffer allocation failed\n");
-		s = SYNTIANT_NDP_ERROR_NOMEM;
-		return s;
-	}
+		if (dev->keyword_buffer == NULL) {
+			auddbg("keyword buffer allocation failed\n");
+			s = SYNTIANT_NDP_ERROR_NOMEM;
+			return s;
+		}
 
 #ifdef CONFIG_NDP120_AEC_SUPPORT
-	s = syntiant_ndp120_config_barge_in(dev->ndp, BARGE_IN_INIT);
-	if (s) {
-		auddbg("error enabling barge-in: %s\n", s);
-		goto errout_ndp120_init;
-	}
+		s = syntiant_ndp120_config_barge_in(dev->ndp, BARGE_IN_INIT);
+		if (s) {
+			auddbg("error enabling barge-in: %s\n", s);
+			goto errout_ndp120_init;
+		}
 #endif
 
-	s_num_labels = 16;
-	s = get_versions_and_labels(dev->ndp, s_label_data, sizeof(s_label_data), s_labels, &s_num_labels);
+		s_num_labels = 16;
+		s = get_versions_and_labels(dev->ndp, s_label_data, sizeof(s_label_data), s_labels, &s_num_labels);
 #ifdef CONFIG_DEBUG_AUDIO_INFO
-	dsp_flow_show(dev->ndp);
+		dsp_flow_show(dev->ndp);
 #endif
-	ndp120_kd_stop_match_process(dev);
+		ndp120_kd_stop_match_process(dev);
 
-	if (!dev->mute) {
-		/* turn on interrupts only if mic is unmute */
-		ndp120_kd_start(dev);
-	} else {
-		ndp120_kd_stop(dev);
-	}
+		if (!dev->mute) {
+			/* turn on interrupts only if mic is unmute */
+			ndp120_kd_start(dev);
+		} else {
+			ndp120_kd_stop(dev);
+		}
 
 #ifdef CONFIG_NDP120_AEC_SUPPORT
-	g_ndp120_state = NOT_RECORDING;
-	dev->extclk_inuse = false;
-	ndp120_aec_enable(dev);
+		g_ndp120_state = NOT_RECORDING;
+		dev->extclk_inuse = false;
+		ndp120_aec_enable(dev);
 #endif
-
+		dev->alive = true;
+		dev->fw_loaded = true;
+	}
 #ifdef CONFIG_NDP120_ALIVE_CHECK
 	if (!reinit) {
 		pid_t pid = kernel_thread("NDP_health_check", 100, 4096, ndp120_app_device_health_check, NULL);
@@ -1451,7 +1457,6 @@ int ndp120_init(struct ndp120_dev_s *dev, bool reinit)
 		}
 	}
 #endif
-	dev->alive = true;
 	dev->keyword_correction = false;
 	dev->sample_ready_cnt = 0;
 
@@ -1570,6 +1575,10 @@ int ndp120_irq_handler_work(struct ndp120_dev_s *dev)
 	int s, serialno = 0;
 	uint32_t network_id;
 	int ret = SYNTIANT_NDP_ERROR_NONE;
+
+	if (!ndp) {
+		goto errout_with_irq;
+	}
 
 	s = syntiant_ndp120_poll(ndp, &notifications, 1);
 	if (check_status("poll", s)) {
@@ -1830,8 +1839,10 @@ int ndp120_change_kd(struct ndp120_dev_s *dev)
 	dev->kd_changed = true;
 	dev->lower->irq_enable(false);
 
-	s = syntiant_ndp_uninit(dev->ndp, false, SYNTIANT_NDP_INIT_MODE_RESET);
-	audvdbg("uninit : %d\n", s);
+	if (dev->ndp) {
+		s = syntiant_ndp_uninit(dev->ndp, false, SYNTIANT_NDP_INIT_MODE_RESET);
+		audvdbg("uninit : %d\n", s);
+	}
 
 	dev->lower->reset();
 
@@ -1982,6 +1993,11 @@ void ndp120_test_internal_passthrough_switch(struct ndp120_dev_s *dev, int inter
 {
     uint32_t audctrl = 0;
     int intf = 0;
+
+	if (!dev->ndp) {
+		auddbg("NDP not initialized\n");
+		return;
+	}
 
     syntiant_ndp120_read(dev->ndp, 1, NDP120_CHIP_CONFIG_AUDCTRL(intf), &audctrl);
     if (internal) {

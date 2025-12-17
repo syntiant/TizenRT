@@ -180,6 +180,10 @@ static int ndp120_setMute(FAR struct ndp120_dev_s *priv, bool mute)
 {
 	int ret = 0;
 	audvdbg("mute : %d\n", mute);
+	/* if NDP has not been initialized, return without doing anything */
+	if (!priv->ndp) {
+		return 0;
+	}
 	if (mute) {
 		ret = ndp120_kd_stop(priv);
 		if (ret != 0) {
@@ -722,6 +726,8 @@ static int ndp120_ioctl(FAR struct audio_lowerhalf_s *dev, int cmd, unsigned lon
 			return -EBUSY;
 		}
 		priv->kd_num = arg;
+		priv->lower->reset();
+		priv->lower->irq_enable(true);
 		ndp120_change_kd(priv);
 		break;
 	}

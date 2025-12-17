@@ -39,6 +39,10 @@
 
 #ifdef CONFIG_AUDIO_NDP120
 
+
+// comment away to keep the previous behavior
+#define HOLD_NDP_IN_RESET_UNTIL_NEEDED
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -114,9 +118,16 @@ static void rtl8730e_ndp120_enable_irq(bool enable)
 static void rtl8730e_ndp120_irq_attach(ndp120_handler_t handler, FAR char *arg)
 {
 	g_ndp120info.handler = handler;
+#if defined(HOLD_NDP_IN_RESET_UNTIL_NEEDED)
+	gpio_t irq_pin;
+	gpio_init(&irq_pin, PA_23);
+	gpio_mode(&irq_pin, PullDown);
+#endif
 	gpio_irq_init(&g_ndp120info.data_ready, PA_23, rtl8730e_ndp120_irq_handler, arg);
 	gpio_irq_set(&g_ndp120info.data_ready, IRQ_HIGH, 1);
+#if !defined(HOLD_NDP_IN_RESET_UNTIL_NEEDED)
 	gpio_irq_enable(&g_ndp120info.data_ready);
+#endif
 }
 
 static void rtl8730e_ndp120_set_dmic(bool enable)
@@ -143,6 +154,15 @@ static void rtl8730e_ndp120_reset()
 	gpio_write(&g_ndp120info.reset, 1);
 	up_mdelay(20);
 }
+
+#if defined(HOLD_NDP_IN_RESET_UNTIL_NEEDED)
+static void rtl8730e_ndp120_hold_in_reset()
+{
+	gpio_dir(&g_ndp120info.reset, PIN_OUTPUT);
+	gpio_mode(&g_ndp120info.reset, PullDown);
+	gpio_write(&g_ndp120info.reset, 0);
+}
+#endif
 
 #ifdef CONFIG_PM
 static void rtl8730e_ndp120_pm(bool sleep)
@@ -199,7 +219,11 @@ int rtl8730e_ndp120_initialize(int minor)
 		g_ndp120info.lower.set_dmic = rtl8730e_ndp120_set_dmic;
 		gpio_init(&g_ndp120info.dmic, GPIO_DMIC_EN);
 		gpio_init(&g_ndp120info.reset, PA_24);
+#if defined(HOLD_NDP_IN_RESET_UNTIL_NEEDED)
+		rtl8730e_ndp120_hold_in_reset();
+#else
 		rtl8730e_ndp120_reset();
+#endif
 		rtl8730e_ndp120_set_dmic(false);
 #ifdef CONFIG_PM
 		g_ndp120info.lower.set_pm_state = rtl8730e_ndp120_pm;
