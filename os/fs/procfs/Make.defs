@@ -66,6 +66,13 @@ ifeq ($(CONFIG_CM),y)
 CSRCS += fs_procfscm.c
 endif
 
+#ifeq ($(CONFIG_AUDIO_NDP120),y)
+#ifneq ($(CONFIG_FS_PROCFS_EXCLUDE_NDP120),y)
+CSRCS += fs_procfsndp120.c
+CFLAGS += -I$(TOPDIR)/drivers/ai-soc/ndp120/include -I$(TOPDIR)/drivers/audio -DEXCLUDE_SYNTIANT_CORE_1
+#endif
+#endif
+
 ifeq ($(CONFIG_ARCH_BOARD_SIDK_S5JT200),y)
 CFLAGS+=-I$(TOPDIR)/../apps/include/netutils/wifi
 endif

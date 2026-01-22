@@ -100,6 +100,10 @@ extern const struct procfs_operations version_operations;
 extern const struct procfs_operations logsave_operations;
 #endif
 
+#if defined(CONFIG_AUDIO_NDP120) && !defined(CONFIG_FS_PROCFS_EXCLUDE_NDP120)
+extern const struct procfs_operations ndp120_proc_operations;
+#endif
+
 /* This is not good.  These are implemented in drivers/mtd.  Having to
  * deal with them here is not a good coupling.
  */
@@ -172,6 +176,10 @@ static const struct procfs_entry_s g_procfsentries[] = {
 #if !defined(CONFIG_FS_PROCFS_EXCLUDE_EREPORT)
 	{"ereport**", &ereport_operations},
 	{"ereport/*", &ereport_operations},
+#endif
+
+#if defined(CONFIG_AUDIO_NDP120) && !defined(CONFIG_FS_PROCFS_EXCLUDE_NDP120)
+	{"ndp120", &ndp120_proc_operations},
 #endif
 
 	{NULL, NULL}
